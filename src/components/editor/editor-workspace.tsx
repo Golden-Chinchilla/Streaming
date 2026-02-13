@@ -20,6 +20,7 @@ import {
   Undo2,
   WandSparkles,
 } from "lucide-react";
+import { sankey, SankeyGraph as D3SankeyGraph } from "d3-sankey";
 import { parseSankeyTextDetailed } from "@/lib/parse";
 import {
   clearRecentTemplateIds,
@@ -58,11 +59,22 @@ import {
   DataFormat,
   PerformanceMode,
   SankeyDocument,
+  SankeyStyle,
   TemplateSummary,
 } from "@/lib/types";
+import { AppIssue } from "@/lib/issues";
 import { linkStyleKey } from "@/lib/utils";
 import { SankeyMonacoEditor } from "@/components/editor/monaco-editor";
 import { SankeyCanvas } from "@/components/editor/sankey-canvas";
+import { IssueCenter } from "@/components/common/issue-center";
+import { useAppDialog } from "@/components/common/app-dialog";
+import {
+  buttonPrimarySm,
+  buttonSecondaryTiny,
+  buttonDangerSoftTiny,
+  emptyStatePanelSm,
+  withDisabled,
+} from "@/components/common/interaction-styles";
 import { useEditorStore } from "@/store/editor-store";
 
 function detectFileFormat(fileName: string): DataFormat | "xlsx" | null {
@@ -135,6 +147,7 @@ const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
 const EXPORT_PRESET_STORAGE_KEY = "streaming-export-presets-v1";
 const EXPORT_SETTINGS_STORAGE_KEY = "streaming-export-settings-v1";
 const MAPPING_PRESETS_STORAGE_KEY = "streaming-mapping-presets-v1";
+const STYLE_PRESET_STORAGE_KEY = "streaming-style-presets-v1";
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
 const USER_TEMPLATE_ACCENTS = [
@@ -142,6 +155,154 @@ const USER_TEMPLATE_ACCENTS = [
   "from-emerald-500 to-teal-500",
   "from-fuchsia-500 to-orange-500",
   "from-indigo-500 to-sky-500",
+];
+
+type AutoLayoutStrategy = "reset" | "compact" | "spacious" | "centered";
+type LayoutNodeDatum = { id: string };
+type LayoutLinkDatum = { source: string; target: string; value: number };
+type LayoutGraph = D3SankeyGraph<LayoutNodeDatum, LayoutLinkDatum>;
+
+const AUTO_LAYOUT_STRATEGY_OPTIONS: Array<{ id: AutoLayoutStrategy; label: string }> = [
+  { id: "reset", label: "Default" },
+  { id: "compact", label: "Compact" },
+  { id: "spacious", label: "Spacious" },
+  { id: "centered", label: "Centered" },
+];
+const LAYOUT_TOP = 24;
+const LAYOUT_BOTTOM = 676;
+
+function clampLayoutTop(top: number, nodeHeight: number) {
+  return Math.max(LAYOUT_TOP, Math.min(LAYOUT_BOTTOM - nodeHeight, top));
+}
+
+function buildLayoutByStrategy(
+  graph: { nodes: { id: string }[]; links: { source: string; target: string; value: number }[] },
+  style: { nodeWidth: number; nodePadding: number },
+  strategy: Exclude<AutoLayoutStrategy, "reset">,
+) {
+  const paddingByStrategy =
+    strategy === "compact"
+      ? Math.max(6, Math.round(style.nodePadding * 0.65))
+      : strategy === "spacious"
+        ? Math.min(48, Math.round(style.nodePadding * 1.45))
+        : style.nodePadding;
+
+  const generator = sankey<LayoutNodeDatum, LayoutLinkDatum>()
+    .nodeId((node) => node.id)
+    .nodeWidth(style.nodeWidth)
+    .nodePadding(paddingByStrategy)
+    .extent([
+      [LAYOUT_TOP, LAYOUT_TOP],
+      [1176, LAYOUT_BOTTOM],
+    ]);
+
+  const built: LayoutGraph = generator({
+    nodes: graph.nodes.map((node) => ({ ...node })),
+    links: graph.links.map((link) => ({ ...link })),
+  });
+
+  const nextPositions: Record<string, number> = {};
+  if (strategy !== "centered") {
+    for (const node of built.nodes) {
+      nextPositions[node.id] = node.y0 ?? LAYOUT_TOP;
+    }
+    return nextPositions;
+  }
+
+  const columns = new Map<number, typeof built.nodes>();
+  for (const node of built.nodes) {
+    const columnKey = Math.round(node.x0 ?? 0);
+    const inColumn = columns.get(columnKey) ?? [];
+    inColumn.push(node);
+    columns.set(columnKey, inColumn);
+  }
+
+  for (const [, columnNodes] of columns) {
+    const minY = Math.min(...columnNodes.map((node) => node.y0 ?? LAYOUT_TOP));
+    const maxY = Math.max(...columnNodes.map((node) => node.y1 ?? LAYOUT_TOP));
+    const columnHeight = maxY - minY;
+    const targetTop = LAYOUT_TOP + ((LAYOUT_BOTTOM - LAYOUT_TOP) - columnHeight) / 2;
+    const offset = targetTop - minY;
+
+    for (const node of columnNodes) {
+      const currentTop = node.y0 ?? LAYOUT_TOP;
+      const currentBottom = node.y1 ?? currentTop;
+      const height = currentBottom - currentTop;
+      nextPositions[node.id] = clampLayoutTop(currentTop + offset, height);
+    }
+  }
+
+  return nextPositions;
+}
+
+type StylePreset = {
+  id: string;
+  name: string;
+  style: SankeyStyle;
+  builtIn?: boolean;
+};
+
+const DEFAULT_STYLE_PRESETS: StylePreset[] = [
+  {
+    id: "style-clean-light",
+    name: "Clean Light",
+    builtIn: true,
+    style: {
+      ...blankDocument.style,
+      theme: "light",
+      palette: "classic",
+      nodeWidth: 20,
+      nodePadding: 18,
+      nodeRadius: 3,
+      linkOpacity: 0.45,
+      curvature: 0.5,
+      showLabels: true,
+      labelFontSize: 12,
+      labelPosition: "outside",
+      labelColor: "#334155",
+      labelFontFamily: "Roboto",
+    },
+  },
+  {
+    id: "style-midnight-flow",
+    name: "Midnight Flow",
+    builtIn: true,
+    style: {
+      ...blankDocument.style,
+      theme: "dark",
+      palette: "ocean",
+      nodeWidth: 18,
+      nodePadding: 16,
+      nodeRadius: 4,
+      linkOpacity: 0.55,
+      curvature: 0.45,
+      showLabels: true,
+      labelFontSize: 12,
+      labelPosition: "outside",
+      labelColor: "#cbd5e1",
+      labelFontFamily: "Google Sans",
+    },
+  },
+  {
+    id: "style-report-compact",
+    name: "Report Compact",
+    builtIn: true,
+    style: {
+      ...blankDocument.style,
+      theme: "light",
+      palette: "sunset",
+      nodeWidth: 14,
+      nodePadding: 10,
+      nodeRadius: 2,
+      linkOpacity: 0.5,
+      curvature: 0.4,
+      showLabels: true,
+      labelFontSize: 11,
+      labelPosition: "inside",
+      labelColor: "#1f2937",
+      labelFontFamily: "System Sans",
+    },
+  },
 ];
 type MappingPreset = {
   id: string;
@@ -198,6 +359,7 @@ function loadExportSettingsFromStorage() {
 
 export function EditorWorkspace({ templateId, docId }: Props) {
   const router = useRouter();
+  const { confirm, prompt, dialogNode } = useAppDialog();
   const [initialExportSettings] = useState(loadExportSettingsFromStorage);
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(
     DEFAULT_APP_PREFERENCES,
@@ -209,6 +371,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [libraryTemplateSourceMode, setLibraryTemplateSourceMode] = useState<
     "all" | "user" | "builtin"
   >("all");
+  const [libraryTemplateDifficultyFilter, setLibraryTemplateDifficultyFilter] = useState<
+    "all" | "Easy" | "Medium" | "Advanced"
+  >("all");
+  const [libraryTemplateTagFilter, setLibraryTemplateTagFilter] = useState("all");
   const [allDocuments, setAllDocuments] = useState<SankeyDocument[]>([]);
   const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
@@ -287,6 +453,29 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     }
   });
   const [newPresetName, setNewPresetName] = useState("");
+  const [customStylePresets, setCustomStylePresets] = useState<StylePreset[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(STYLE_PRESET_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as StylePreset[];
+      return parsed.filter(
+        (item) =>
+          typeof item.id === "string" &&
+          typeof item.name === "string" &&
+          typeof item.style === "object" &&
+          typeof item.style?.theme === "string" &&
+          typeof item.style?.palette === "string",
+      );
+    } catch {
+      return [];
+    }
+  });
+  const [newStylePresetName, setNewStylePresetName] = useState("");
+  const [autoLayoutStrategy, setAutoLayoutStrategy] = useState<AutoLayoutStrategy>("reset");
+  const [showShortcutHints, setShowShortcutHints] = useState(false);
+  const [canvasActionIssue, setCanvasActionIssue] = useState<AppIssue | null>(null);
+  const [exportIssues, setExportIssues] = useState<AppIssue[]>([]);
 
   const {
     document: currentDoc,
@@ -309,6 +498,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     syncFromEditor,
     patchStyle,
     setNodePosition,
+    setNodePositions,
     clearNodePositions,
     setSelectedNodeIds,
     setSelectedLinkIndex,
@@ -422,6 +612,18 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     return [...templateList, ...userTemplates];
   }, [userTemplates]);
 
+  const libraryTemplateTagOptions = useMemo(() => {
+    return [
+      "all",
+      ...new Set(
+        allTemplates
+          .flatMap((template) => template.tags ?? [])
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    ];
+  }, [allTemplates]);
+
   const filteredDocuments = useMemo(() => {
     const keyword = librarySearch.trim().toLowerCase();
     if (!keyword) return allDocuments;
@@ -442,8 +644,23 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       const isUserTemplate = template.id.startsWith("user-");
       return libraryTemplateSourceMode === "user" ? isUserTemplate : !isUserTemplate;
     });
-    if (!keyword) return bySource;
-    return bySource.filter((template) => {
+
+    const byDifficulty =
+      libraryTemplateDifficultyFilter === "all"
+        ? bySource
+        : bySource.filter((template) => template.difficulty === libraryTemplateDifficultyFilter);
+
+    const byTag =
+      libraryTemplateTagFilter === "all"
+        ? byDifficulty
+        : byDifficulty.filter((template) =>
+            (template.tags ?? []).some(
+              (tag) => tag.toLowerCase() === libraryTemplateTagFilter.toLowerCase(),
+            ),
+          );
+
+    if (!keyword) return byTag;
+    return byTag.filter((template) => {
       return (
         template.name.toLowerCase().includes(keyword) ||
         template.category.toLowerCase().includes(keyword) ||
@@ -451,7 +668,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         (template.tags ?? []).some((tag) => tag.toLowerCase().includes(keyword))
       );
     });
-  }, [allTemplates, librarySearch, libraryTemplateSourceMode]);
+  }, [
+    allTemplates,
+    librarySearch,
+    libraryTemplateDifficultyFilter,
+    libraryTemplateSourceMode,
+    libraryTemplateTagFilter,
+  ]);
 
   const sortedFilteredTemplates = useMemo(() => {
     const rank = new Map(recentTemplateIds.map((id, index) => [id, index]));
@@ -479,28 +702,131 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     selectableUserTemplateIds.every((id) => effectiveSelectedUserTemplateIds.includes(id));
 
   useEffect(() => {
+    const isEditingTarget = (target: EventTarget | null) => {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      const tagName = element.tagName;
+      if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") return true;
+      if (element.isContentEditable) return true;
+      if (element.closest("[role='textbox']")) return true;
+      return false;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      const editing = isEditingTarget(event.target);
+      const lower = event.key.toLowerCase();
+
+      if (event.shiftKey && lower === "?" && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        setShowShortcutHints((value) => !value);
+        return;
+      }
+
+      if (!editing && event.key === "Escape") {
         clearSelection();
+        setCanvasActionIssue({
+          id: `shortcut-escape-${Date.now()}`,
+          level: "info",
+          title: "Selection cleared",
+          description: "锟斤拷菁锟? Escape",
+        });
         return;
       }
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() === "z" && !event.shiftKey) {
-        event.preventDefault();
-        undo();
-        return;
+
+      if (editing) return;
+
+      if (event.ctrlKey || event.metaKey) {
+        if (lower === "z" && !event.shiftKey) {
+          event.preventDefault();
+          undo();
+          return;
+        }
+        if (lower === "y" || (lower === "z" && event.shiftKey)) {
+          event.preventDefault();
+          redo();
+          return;
+        }
+        if (lower === "a") {
+          event.preventDefault();
+          setSelectedNodeIds(graph.nodes.map((node) => node.id));
+          setSelectedLinkIndex(null);
+          setCanvasActionIssue({
+            id: `shortcut-select-all-${Date.now()}`,
+            level: "info",
+            title: `Selected ${graph.nodes.length} nodes`,
+            description: "锟斤拷菁锟? Ctrl/Cmd+A",
+          });
+          return;
+        }
+        if (event.shiftKey && lower === "l") {
+          event.preventDefault();
+          if (autoLayoutStrategy === "reset") {
+            clearNodePositions();
+            setCanvasActionIssue({
+              id: `shortcut-layout-reset-${Date.now()}`,
+              level: "success",
+              title: "Applied auto-layout: Default",
+              description: "锟斤拷菁锟? Ctrl/Cmd+Shift+L",
+            });
+            return;
+          }
+          const nextPositions = buildLayoutByStrategy(graph, currentDoc.style, autoLayoutStrategy);
+          setNodePositions(nextPositions);
+          setCanvasActionIssue({
+            id: `shortcut-layout-${Date.now()}`,
+            level: "success",
+            title: `Applied auto-layout: ${AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === autoLayoutStrategy)?.label ?? autoLayoutStrategy}`,
+            description: "锟斤拷菁锟? Ctrl/Cmd+Shift+L",
+          });
+          return;
+        }
+        if (lower === "1") {
+          event.preventDefault();
+          setActiveTab("source");
+          return;
+        }
+        if (lower === "2") {
+          event.preventDefault();
+          setActiveTab("editor");
+          return;
+        }
       }
-      if (
-        event.key.toLowerCase() === "y" ||
-        (event.key.toLowerCase() === "z" && event.shiftKey)
-      ) {
+
+      if ((event.key === "Delete" || event.key === "Backspace") && (selectedNodeIds.length > 0 || selectedLinkIndex != null)) {
         event.preventDefault();
-        redo();
+        if (selectedNodeIds.length > 0) {
+          clearSelectedNodeStyles();
+        }
+        if (selectedLinkIndex != null) {
+          clearSelectedLinkStyle();
+        }
+        clearSelection();
+        setCanvasActionIssue({
+          id: `shortcut-delete-${Date.now()}`,
+          level: "warning",
+          title: "Cleared selected styles",
+          description: "锟斤拷菁锟? Delete / Backspace",
+        });
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearSelection, redo, undo]);
+  }, [
+    autoLayoutStrategy,
+    clearNodePositions,
+    clearSelectedLinkStyle,
+    clearSelectedNodeStyles,
+    clearSelection,
+    currentDoc.style,
+    graph,
+    redo,
+    selectedLinkIndex,
+    selectedNodeIds.length,
+    setNodePositions,
+    setSelectedLinkIndex,
+    setSelectedNodeIds,
+    undo,
+  ]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -515,6 +841,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       JSON.stringify(mappingPresets),
     );
   }, [mappingPresets]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      STYLE_PRESET_STORAGE_KEY,
+      JSON.stringify(customStylePresets),
+    );
+  }, [customStylePresets]);
 
   useEffect(() => {
     void saveAppPreferences(appPreferences);
@@ -539,6 +872,22 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     exportPngScale,
     exportTransparentBg,
     exportWidth,
+  ]);
+
+  useEffect(() => {
+    if (exportIssues.length === 0) return;
+    setExportIssues([]);
+  }, [
+    exportAllFormats.html,
+    exportAllFormats.png,
+    exportAllFormats.svg,
+    exportAllNamingMode,
+    exportHeight,
+    exportPadding,
+    exportPngScale,
+    exportTransparentBg,
+    exportWidth,
+    exportIssues.length,
   ]);
 
   useEffect(() => {
@@ -573,6 +922,59 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     if (!pastedJson.trim()) return null;
     return parseSankeyTextDetailed(pastedJson, "json");
   }, [pastedJson]);
+
+  const sourceIssues = useMemo<AppIssue[]>(() => {
+    const issues: AppIssue[] = [];
+    if (sourceError) {
+      issues.push({
+        id: "source-error",
+        level: "error",
+        title: "Import issue",
+        description: sourceError,
+      });
+    }
+    if (sourceNotice) {
+      issues.push({
+        id: "source-notice",
+        level: "success",
+        title: "Import updated",
+        description: sourceNotice,
+      });
+    }
+    return issues;
+  }, [sourceError, sourceNotice]);
+
+  const editorIssues = useMemo<AppIssue[]>(() => {
+    if (parseError) {
+      return [
+        {
+          id: "editor-parse-error",
+          level: "error",
+          title: "Parse error",
+          description: parseError,
+        },
+      ];
+    }
+    return [
+      {
+        id: "editor-parse-ok",
+        level: "success",
+        title: "Data is valid",
+      },
+    ];
+  }, [parseError]);
+
+  const canvasActionIssues = useMemo<AppIssue[]>(() => {
+    return canvasActionIssue ? [canvasActionIssue] : [];
+  }, [canvasActionIssue]);
+
+  useEffect(() => {
+    if (!canvasActionIssue) return;
+    const timeoutId = window.setTimeout(() => {
+      setCanvasActionIssue(null);
+    }, 2600);
+    return () => window.clearTimeout(timeoutId);
+  }, [canvasActionIssue]);
 
   const resolvedExportBaseName = useMemo(() => {
     const today = new Date();
@@ -685,6 +1087,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     () => [...DEFAULT_EXPORT_PRESETS, ...customExportPresets],
     [customExportPresets],
   );
+
+  const allStylePresets = useMemo(
+    () => [...DEFAULT_STYLE_PRESETS, ...customStylePresets],
+    [customStylePresets],
+  );
   const mappingPresetsForMode = useMemo(
     () => mappingPresets.filter((item) => item.mode === sourcePreviewMode),
     [mappingPresets, sourcePreviewMode],
@@ -791,12 +1198,66 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     [graph.links.length, graph.nodes.length],
   );
 
+  const performanceProfile = useMemo(() => {
+    if (graphMetrics.nodes >= 900 || graphMetrics.links >= 2500) {
+      return {
+        tier: "extreme",
+        recommendedMode: "performance" as Exclude<PerformanceMode, "auto">,
+        shouldReduceMotion: true,
+      };
+    }
+    if (graphMetrics.nodes >= 500 || graphMetrics.links >= 1400) {
+      return {
+        tier: "heavy",
+        recommendedMode: "performance" as Exclude<PerformanceMode, "auto">,
+        shouldReduceMotion: true,
+      };
+    }
+    if (graphMetrics.nodes >= 220 || graphMetrics.links >= 650) {
+      return {
+        tier: "medium",
+        recommendedMode: "balanced" as Exclude<PerformanceMode, "auto">,
+        shouldReduceMotion: false,
+      };
+    }
+    return {
+      tier: "light",
+      recommendedMode: "quality" as Exclude<PerformanceMode, "auto">,
+      shouldReduceMotion: false,
+    };
+  }, [graphMetrics.links, graphMetrics.nodes]);
+
   const effectivePerformanceMode = useMemo<Exclude<PerformanceMode, "auto">>(() => {
     if (performanceMode !== "auto") return performanceMode;
-    if (graphMetrics.nodes >= 500 || graphMetrics.links >= 1400) return "performance";
-    if (graphMetrics.nodes >= 220 || graphMetrics.links >= 650) return "balanced";
-    return "quality";
-  }, [graphMetrics.links, graphMetrics.nodes, performanceMode]);
+    return performanceProfile.recommendedMode;
+  }, [performanceMode, performanceProfile.recommendedMode]);
+
+  const performanceIssues = useMemo<AppIssue[]>(() => {
+    const issues: AppIssue[] = [];
+
+    if (performanceProfile.tier === "heavy" || performanceProfile.tier === "extreme") {
+      issues.push({
+        id: "perf-heavy-graph",
+        level: performanceProfile.tier === "extreme" ? "warning" : "info",
+        title:
+          performanceProfile.tier === "extreme"
+            ? "Extreme graph size detected"
+            : "Heavy graph size detected",
+        description: `Recommended mode: ${performanceProfile.recommendedMode}`,
+      });
+    }
+
+    if (performanceMode !== "auto" && performanceMode !== performanceProfile.recommendedMode) {
+      issues.push({
+        id: "perf-mode-mismatch",
+        level: "warning",
+        title: "Current mode differs from recommendation",
+        description: `Current: ${performanceMode}, recommended: ${performanceProfile.recommendedMode}`,
+      });
+    }
+
+    return issues;
+  }, [performanceMode, performanceProfile.recommendedMode, performanceProfile.tier]);
 
   const renderHints = useMemo(() => {
     if (effectivePerformanceMode === "quality") {
@@ -817,6 +1278,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         lowDetailDuringDrag: true,
       };
     }
+
+    if (performanceProfile.tier === "extreme") {
+      return {
+        showLabels: false,
+        enableLinkHover: false,
+        dragThrottleMs: 52,
+        simplifyLinkCurves: true,
+        lowDetailDuringDrag: true,
+      };
+    }
+
     return {
       showLabels: false,
       enableLinkHover: graphMetrics.links <= 900,
@@ -824,7 +1296,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       simplifyLinkCurves: true,
       lowDetailDuringDrag: true,
     };
-  }, [effectivePerformanceMode, graphMetrics.links, graphMetrics.nodes]);
+  }, [effectivePerformanceMode, graphMetrics.links, graphMetrics.nodes, performanceProfile.tier]);
 
   const selectedLink = useMemo(() => {
     if (selectedLinkIndex == null) return null;
@@ -857,6 +1329,257 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     : 100;
   const batchSelectionOpacityValue = selectedNodeIds.length === 1 ? singleSelectedNodeOpacity : selectionOpacity;
   const selectedLinkWidthScale = selectedLinkStyle?.widthScale ?? 1;
+
+  const pushCanvasActionIssue = (
+    level: AppIssue["level"],
+    title: string,
+    description?: string,
+  ) => {
+    setCanvasActionIssue({
+      id: `canvas-action-${crypto.randomUUID()}`,
+      level,
+      title,
+      description,
+    });
+  };
+
+  const applyAutoLayoutStrategy = (strategy: AutoLayoutStrategy, source: "toolbar" | "shortcut" = "toolbar") => {
+    if (strategy === "reset") {
+      clearNodePositions();
+      pushCanvasActionIssue(
+        "success",
+        "Applied auto-layout: Default",
+        source === "shortcut" ? "锟斤拷菁锟? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
+      );
+      return;
+    }
+    const nextPositions = buildLayoutByStrategy(graph, currentDoc.style, strategy);
+    setNodePositions(nextPositions);
+    const label = AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === strategy)?.label ?? strategy;
+    pushCanvasActionIssue(
+      "success",
+      `Applied auto-layout: ${label}`,
+      source === "shortcut" ? "锟斤拷菁锟? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
+    );
+  };
+
+  const applySelectionColorWithNotice = () => {
+    if (selectedNodeIds.length === 0) return;
+    applyNodeColorToSelection(selectionColor);
+    pushCanvasActionIssue("success", "Batch color applied", `${selectedNodeIds.length} nodes`);
+  };
+
+  const applySelectionOpacityWithNotice = () => {
+    if (selectedNodeIds.length === 0) return;
+    applyNodeOpacityToSelection(batchSelectionOpacityValue / 100);
+    pushCanvasActionIssue("success", "Batch opacity applied", `${selectedNodeIds.length} nodes`);
+  };
+
+  const resetSelectedNodeStylesWithNotice = () => {
+    if (selectedNodeIds.length === 0) return;
+    clearSelectedNodeStyles();
+    pushCanvasActionIssue("warning", "Reset selected node styles", `${selectedNodeIds.length} nodes`);
+  };
+
+  const clearSelectionWithNotice = () => {
+    if (selectedNodeIds.length === 0 && selectedLinkIndex == null) return;
+    clearSelection();
+    pushCanvasActionIssue("info", "Selection cleared");
+  };
+
+  const applyRecommendedPerformanceMode = () => {
+    setPerformanceMode(performanceProfile.recommendedMode);
+    pushCanvasActionIssue(
+      "success",
+      `Performance mode set to ${performanceProfile.recommendedMode}`,
+      "Applied recommended mode for current graph size",
+    );
+  };
+
+  const switchToAutoPerformanceMode = () => {
+    setPerformanceMode("auto");
+    pushCanvasActionIssue("info", "Performance mode set to auto");
+  };
+
+  const saveCurrentStylePreset = async () => {
+    const candidate = newStylePresetName.trim() || `${currentDoc.title || "Untitled"} Style`;
+    const existing = customStylePresets.find(
+      (preset) => preset.name.toLowerCase() === candidate.toLowerCase(),
+    );
+
+    if (existing) {
+      const overwrite = await confirm({
+        title: "Overwrite style preset?",
+        message: `Preset "${candidate}" already exists.`,
+        confirmLabel: "Overwrite",
+      });
+      if (!overwrite) return;
+    }
+
+    const preset: StylePreset = {
+      id: existing?.id ?? `style-${crypto.randomUUID()}`,
+      name: candidate,
+      style: { ...currentDoc.style },
+    };
+
+    setCustomStylePresets((prev) => [preset, ...prev.filter((item) => item.id !== preset.id)]);
+    setNewStylePresetName("");
+    pushCanvasActionIssue("success", `Saved style preset: ${candidate}`);
+  };
+
+  const applyStylePreset = (preset: StylePreset) => {
+    patchStyle({ ...preset.style });
+    pushCanvasActionIssue("success", `Applied style preset: ${preset.name}`);
+  };
+
+  const removeStylePreset = async (presetId: string) => {
+    const target = customStylePresets.find((preset) => preset.id === presetId);
+    if (!target) return;
+    const confirmed = await confirm({
+      title: "Delete style preset?",
+      message: `This action cannot be undone. Delete "${target.name}"?`,
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    setCustomStylePresets((prev) => prev.filter((preset) => preset.id !== presetId));
+    pushCanvasActionIssue("warning", `Deleted style preset: ${target.name}`);
+  };
+
+  const validateExportRequest = (target: "svg" | "png" | "html" | "all") => {
+    const issues: AppIssue[] = [];
+
+    const push = (level: AppIssue["level"], title: string, description?: string) => {
+      issues.push({
+        id: `export-issue-${crypto.randomUUID()}`,
+        level,
+        title,
+        description,
+      });
+    };
+
+    if (!Number.isFinite(exportWidth) || exportWidth < 400 || exportWidth > 6000) {
+      push("error", "Invalid export width", "Width must be between 400 and 6000.");
+    }
+    if (!Number.isFinite(exportHeight) || exportHeight < 300 || exportHeight > 6000) {
+      push("error", "Invalid export height", "Height must be between 300 and 6000.");
+    }
+    if (!Number.isFinite(exportPadding) || exportPadding < 0 || exportPadding > 300) {
+      push("error", "Invalid export padding", "Padding must be between 0 and 300.");
+    }
+    if (exportPadding * 2 >= exportWidth || exportPadding * 2 >= exportHeight) {
+      push("error", "Padding is too large", "Padding must be smaller than half of width and height.");
+    }
+    if (!Number.isFinite(exportPngScale) || exportPngScale < 1 || exportPngScale > 4) {
+      push("error", "Invalid PNG scale", "PNG scale must be between 1x and 4x.");
+    }
+
+    const pixelCount = exportWidth * exportHeight * Math.max(1, exportPngScale) * Math.max(1, exportPngScale);
+    if ((target === "png" || target === "all") && pixelCount > 40_000_000) {
+      push("warning", "Large PNG output", "Current size may fail on low-memory devices. Consider lowering size or PNG scale.");
+    }
+
+    if (target === "all") {
+      const selectedCount = Number(exportAllFormats.svg) + Number(exportAllFormats.png) + Number(exportAllFormats.html);
+      if (selectedCount === 0) {
+        push("error", "No export format selected", "Select at least one format in Export All Options.");
+      }
+      if (selectedCount > 1 && exportAllNamingMode === "same") {
+        push("error", "Conflicting file names", "Use suffix naming when exporting multiple formats.");
+      }
+    }
+
+    const includesHtml = target === "html" || (target === "all" && exportAllFormats.html);
+    if (includesHtml && exportTransparentBg) {
+      push("warning", "Transparent HTML background", "HTML export may appear transparent depending on viewer background color.");
+    }
+
+    return issues;
+  };
+
+  const runExportSvg = () => {
+    const issues = validateExportRequest("svg");
+    setExportIssues(issues);
+    if (issues.some((issue) => issue.level === "error")) return;
+    exportSvg();
+    setExportIssues((prev) => [
+      ...prev,
+      {
+        id: `export-success-${crypto.randomUUID()}`,
+        level: "success",
+        title: "SVG exported",
+      },
+    ]);
+  };
+
+  const runExportHtml = () => {
+    const issues = validateExportRequest("html");
+    setExportIssues(issues);
+    if (issues.some((issue) => issue.level === "error")) return;
+    exportHtml();
+    setExportIssues((prev) => [
+      ...prev,
+      {
+        id: `export-success-${crypto.randomUUID()}`,
+        level: "success",
+        title: "HTML exported",
+      },
+    ]);
+  };
+
+  const runExportPng = async () => {
+    const issues = validateExportRequest("png");
+    setExportIssues(issues);
+    if (issues.some((issue) => issue.level === "error")) return;
+    try {
+      await exportPng();
+      setExportIssues((prev) => [
+        ...prev,
+        {
+          id: `export-success-${crypto.randomUUID()}`,
+          level: "success",
+          title: "PNG exported",
+        },
+      ]);
+    } catch (error) {
+      setExportIssues((prev) => [
+        ...prev,
+        {
+          id: `export-failed-${crypto.randomUUID()}`,
+          level: "error",
+          title: "PNG export failed",
+          description: error instanceof Error ? error.message : "Failed to render PNG",
+        },
+      ]);
+    }
+  };
+
+  const runExportAll = async () => {
+    const issues = validateExportRequest("all");
+    setExportIssues(issues);
+    if (issues.some((issue) => issue.level === "error")) return;
+    try {
+      await exportAll();
+      setExportIssues((prev) => [
+        ...prev,
+        {
+          id: `export-success-${crypto.randomUUID()}`,
+          level: "success",
+          title: "Export All completed",
+        },
+      ]);
+    } catch (error) {
+      setExportIssues((prev) => [
+        ...prev,
+        {
+          id: `export-failed-${crypto.randomUUID()}`,
+          level: "error",
+          title: "Export All failed",
+          description: error instanceof Error ? error.message : "Unexpected export error",
+        },
+      ]);
+    }
+  };
 
   const exportSvg = (customBaseName?: string) => {
     if (!exportSvgString) return;
@@ -1061,14 +1784,20 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setImportFlowAppliedCount(0);
   };
 
-  const saveMappingPreset = () => {
+  const saveMappingPreset = async () => {
     if (!sourcePreview) return;
     if (sourceMappingIssues.length > 0) {
       setSourceError(sourceMappingIssues[0]);
       return;
     }
     const suggested = `${sourcePreviewMode.toUpperCase()} Mapping`;
-    const name = window.prompt("Preset name", suggested)?.trim();
+    const entered = await prompt({
+      title: "Save mapping preset",
+      message: "Enter preset name",
+      defaultValue: suggested,
+      confirmLabel: "Save",
+    });
+    const name = entered?.trim();
     if (!name) return;
     const existing = mappingPresets.find(
       (item) =>
@@ -1077,7 +1806,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     );
     let id = `map-${crypto.randomUUID()}`;
     if (existing) {
-      const overwrite = window.confirm(`Preset "${name}" exists. Overwrite it?`);
+      const overwrite = await confirm({
+        title: "Overwrite mapping preset?",
+        message: `Preset "${name}" already exists.`,
+        confirmLabel: "Overwrite",
+      });
       if (!overwrite) return;
       id = existing.id;
     }
@@ -1265,14 +1998,38 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   const saveAsTemplate = async () => {
     const suggested = `${currentDoc.title || "Untitled"} Template`;
-    const name = window.prompt("Template name", suggested)?.trim();
+    const nameInput = await prompt({
+      title: "Template name",
+      defaultValue: suggested,
+      confirmLabel: "Next",
+    });
+    const name = nameInput?.trim();
     if (!name) return;
-    const description =
-      window.prompt("Template description", "Custom template from current document")?.trim() ||
-      "Custom template from current document";
-    const category = window.prompt("Template category", "Custom")?.trim() || "Custom";
-    const tagsInput =
-      window.prompt("Template tags (comma separated)", "custom")?.trim() || "";
+
+    const descriptionInput = await prompt({
+      title: "Template description",
+      defaultValue: "Custom template from current document",
+      confirmLabel: "Next",
+    });
+    if (descriptionInput == null) return;
+    const description = descriptionInput.trim() || "Custom template from current document";
+
+    const categoryInput = await prompt({
+      title: "Template category",
+      defaultValue: "Custom",
+      confirmLabel: "Next",
+    });
+    if (categoryInput == null) return;
+    const category = categoryInput.trim() || "Custom";
+
+    const tagsInput = await prompt({
+      title: "Template tags",
+      message: "Comma separated",
+      defaultValue: "custom",
+      confirmLabel: "Save",
+    });
+    if (tagsInput == null) return;
+
     const tags = Array.from(
       new Set(
         tagsInput
@@ -1288,9 +2045,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     );
     let templateId = `user-${crypto.randomUUID()}`;
     if (existing) {
-      const overwrite = window.confirm(
-        `A template named "${name}" already exists. Overwrite it?`,
-      );
+      const overwrite = await confirm({
+        title: "Overwrite template?",
+        message: `A template named "${name}" already exists.`,
+        confirmLabel: "Overwrite",
+      });
       if (!overwrite) return;
       templateId = existing.id;
     }
@@ -1333,7 +2092,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   };
 
   const deleteTemplateFromLibrary = async (templateId: string) => {
-    const confirmed = window.confirm("Delete this template?");
+    const confirmed = await confirm({
+      title: "Delete template?",
+      message: "This action cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!confirmed) return;
     await deleteUserTemplate(templateId);
     const [templateIds, templates] = await Promise.all([
@@ -1361,9 +2125,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   const removeSelectedUserTemplates = async () => {
     if (effectiveSelectedUserTemplateIds.length === 0) return;
-    const confirmed = window.confirm(
-      `Delete ${effectiveSelectedUserTemplateIds.length} selected template(s)?`,
-    );
+    const confirmed = await confirm({
+      title: "Delete selected templates?",
+      message: `This action cannot be undone. Delete ${effectiveSelectedUserTemplateIds.length} selected template(s)?`,
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!confirmed) return;
     await deleteUserTemplates(effectiveSelectedUserTemplateIds);
     const [templateIds, templates] = await Promise.all([
@@ -1377,7 +2144,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   const clearRecentTemplatesFromLibrary = async () => {
     if (recentTemplateIds.length === 0) return;
-    const confirmed = window.confirm("Clear recent template history?");
+    const confirmed = await confirm({
+      title: "Clear recent template history?",
+      message: "Only the recent history will be removed. Template files remain unchanged.",
+      confirmLabel: "Clear",
+      tone: "danger",
+    });
     if (!confirmed) return;
     await clearRecentTemplateIds();
     setRecentTemplateIds([]);
@@ -1388,6 +2160,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       await createNewDocument();
       return;
     }
+    const confirmed = await confirm({
+      title: "Delete current document?",
+      message: "This action cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     await deleteDocumentById(currentDoc.id);
     const nextDocs = await loadAllDocuments();
     const nextDoc = nextDocs[0];
@@ -1417,6 +2196,57 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const canvasContainerClass = isDarkTheme
     ? "min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,#1e293b_0%,#0f172a_60%)] p-6"
     : "min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,#ffffff_0%,#f2f6fc_55%)] p-6";
+  const controlButtonClass = isDarkTheme
+    ? "inline-flex items-center gap-1 rounded-md border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+    : "inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600";
+  const controlButtonDisabledClass = `${controlButtonClass} disabled:cursor-not-allowed disabled:opacity-40`;
+  const controlButtonWideClass = isDarkTheme
+    ? "inline-flex items-center gap-1 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+    : "inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600";
+  const controlSelectClass = isDarkTheme
+    ? "h-8 rounded-md border border-slate-600 bg-slate-800 px-2 text-xs text-slate-100"
+    : "h-8 rounded-md border bg-white px-2 text-xs text-slate-700";
+  const documentPopoverClass = isDarkTheme
+    ? "absolute left-4 top-16 z-40 w-96 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-xl"
+    : "absolute left-4 top-16 z-40 w-96 rounded-xl border bg-white p-3 shadow-xl";
+  const innerPanelCardClass = isDarkTheme
+    ? "rounded border border-slate-600 bg-slate-900 p-2 text-xs text-slate-100"
+    : "rounded border bg-white p-2 text-xs text-slate-700";
+  const rightPanelSectionClass = isDarkTheme
+    ? "rounded-lg border border-slate-700 bg-slate-800 p-3"
+    : "rounded-lg border bg-slate-50 p-3";
+  const rightPanelFieldClass = isDarkTheme
+    ? "mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+    : "mt-1 w-full rounded border bg-white px-2 py-1 text-xs text-slate-700";
+  const rightPanelFieldCompactClass = isDarkTheme
+    ? "mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] text-slate-100"
+    : "mt-1 w-full rounded border bg-white px-2 py-1 text-[11px] text-slate-700";
+  const rightPanelActionButtonClass = isDarkTheme
+    ? "rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 hover:bg-slate-800"
+    : "rounded border bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50";
+  const rightPanelNoteCardClass = isDarkTheme
+    ? "mt-2 rounded border border-slate-600 bg-slate-900 px-2 py-2 text-[10px] text-slate-300"
+    : "mt-2 rounded border bg-white px-2 py-2 text-[10px] text-slate-500";
+  const rightPanelInlineFieldClass = isDarkTheme
+    ? "h-8 flex-1 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-100"
+    : "h-8 flex-1 rounded border bg-white px-2 text-xs text-slate-700";
+  const rightPanelActionButtonSmallClass = isDarkTheme
+    ? "rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800"
+    : "rounded border bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
+  const rightPanelCardClass = isDarkTheme
+    ? "mt-2 rounded border border-slate-600 bg-slate-900 p-2"
+    : "mt-2 rounded border bg-white p-2";
+  const libraryActionButtonClass = buttonSecondaryTiny;
+  const libraryActionButtonDisabledClass = withDisabled(buttonSecondaryTiny);
+  const libraryDangerButtonClass = buttonDangerSoftTiny;
+  const libraryDangerButtonDisabledClass = withDisabled(buttonDangerSoftTiny);
+  const sourcePrimaryActionClass = withDisabled(`w-full ${buttonPrimarySm}`);
+  const libraryEmptyStateClass = isDarkTheme
+    ? "rounded-lg border border-dashed border-slate-600 bg-slate-900 px-2 py-3 text-center text-xs text-slate-400"
+    : emptyStatePanelSm;
+  const clearRecentDisabledReason = "No recent template history to clear.";
+  const deleteSelectedDisabledReason = "Select at least one custom template first.";
+
 
   if (!hasHydrated) {
     return <div className="flex h-screen items-center justify-center text-slate-500">Loading editor...</div>;
@@ -1437,7 +2267,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowDocuments((value) => !value)}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600"
+            className={controlButtonClass}
             title="Documents"
           >
             <FileText className="h-3.5 w-3.5" />
@@ -1445,22 +2275,22 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </button>
           <button
             onClick={createNewDocument}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600"
+            className={controlButtonClass}
             title="New document"
           >
             New
           </button>
           <button
             onClick={saveAsCopy}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600"
+            className={controlButtonClass}
             title="Save as copy"
           >
             <CopyPlus className="h-3.5 w-3.5" />
             Save As
           </button>
           <button
-            onClick={saveAsTemplate}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600"
+            onClick={() => void saveAsTemplate()}
+            className={controlButtonClass}
             title="Save as template"
           >
             <LayoutTemplate className="h-3.5 w-3.5" />
@@ -1469,16 +2299,16 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           <button
             onClick={undo}
             disabled={historyPast.length === 0}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Undo (Ctrl/Cmd+Z)"
+            className={controlButtonDisabledClass}
+            title={historyPast.length === 0 ? "No actions to undo." : "Undo (Ctrl/Cmd+Z)"}
           >
             <Undo2 className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={redo}
             disabled={historyFuture.length === 0}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Redo (Ctrl/Cmd+Y)"
+            className={controlButtonDisabledClass}
+            title={historyFuture.length === 0 ? "No actions to redo." : "Redo (Ctrl/Cmd+Y)"}
           >
             <Redo2 className="h-3.5 w-3.5" />
           </button>
@@ -1489,36 +2319,51 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             <Play className="h-3.5 w-3.5" />
             Sync
           </button>
+          <div className="inline-flex items-center gap-1">
+            <select
+              value={autoLayoutStrategy}
+              onChange={(event) => setAutoLayoutStrategy(event.target.value as AutoLayoutStrategy)}
+              className={controlSelectClass}
+              title="Auto-layout strategy"
+            >
+              {AUTO_LAYOUT_STRATEGY_OPTIONS.map((item) => (
+                <option key={`layout-strategy-${item.id}`} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => applyAutoLayoutStrategy(autoLayoutStrategy)}
+              className={controlButtonWideClass}
+              title="Apply auto-layout"
+            >
+              <WandSparkles className="h-3.5 w-3.5" />
+              Auto-layout
+            </button>
+          </div>
           <button
-            onClick={() => clearNodePositions()}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
-          >
-            <WandSparkles className="h-3.5 w-3.5" />
-            Auto-layout
-          </button>
-          <button
-            onClick={() => exportSvg()}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
+            onClick={runExportSvg}
+            className={controlButtonWideClass}
           >
             <Download className="h-3.5 w-3.5" />
             SVG
           </button>
           <button
-            onClick={() => void exportPng()}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
+            onClick={() => void runExportPng()}
+            className={controlButtonWideClass}
           >
             <Download className="h-3.5 w-3.5" />
             PNG
           </button>
           <button
-            onClick={() => exportHtml()}
-            className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
+            onClick={runExportHtml}
+            className={controlButtonWideClass}
           >
             <Download className="h-3.5 w-3.5" />
             HTML
           </button>
           <button
-            onClick={() => void exportAll()}
+            onClick={() => void runExportAll()}
             className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
           >
             <Download className="h-3.5 w-3.5" />
@@ -1528,7 +2373,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       </header>
 
       {showDocuments && (
-        <div className="absolute left-4 top-16 z-40 w-96 rounded-xl border bg-white p-3 shadow-xl">
+        <div className={documentPopoverClass}>
           <div className="mb-2 flex items-center justify-between gap-2">
             <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-[11px]">
               <button
@@ -1551,14 +2396,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             {libraryTab === "documents" ? (
               <button
                 onClick={deleteCurrentDocument}
-                className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
+                className={libraryDangerButtonClass}
               >
                 Delete Current
               </button>
             ) : (
               <button
-                onClick={saveAsTemplate}
-                className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
+                onClick={() => void saveAsTemplate()}
+                className={libraryActionButtonClass}
               >
                 Save Current as Template
               </button>
@@ -1578,41 +2423,71 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   onChange={(event) =>
                     setLibraryTemplateSourceMode(event.target.value as "all" | "user" | "builtin")
                   }
-                  className="h-7 min-w-[120px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
                 >
                   <option value="all">All sources</option>
                   <option value="user">My templates</option>
                   <option value="builtin">Built-in</option>
                 </select>
+                <select
+                  value={libraryTemplateDifficultyFilter}
+                  onChange={(event) =>
+                    setLibraryTemplateDifficultyFilter(
+                      event.target.value as "all" | "Easy" | "Medium" | "Advanced",
+                    )
+                  }
+                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                >
+                  <option value="all">All levels</option>
+                  <option value="Easy">Easy</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Advanced">Advanced</option>
+                </select>
+                <select
+                  value={libraryTemplateTagFilter}
+                  onChange={(event) => setLibraryTemplateTagFilter(event.target.value)}
+                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                >
+                  {libraryTemplateTagOptions.map((tag) => (
+                    <option key={`editor-library-tag-${tag}`} value={tag}>
+                      Tag: {tag}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => void clearRecentTemplatesFromLibrary()}
                   disabled={recentTemplateIds.length === 0}
-                  className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                  className={libraryActionButtonDisabledClass}
+                  title={recentTemplateIds.length === 0 ? clearRecentDisabledReason : "Clear recent template history"}
                 >
                   Clear recent
                 </button>
                 <button
                   onClick={() => void removeSelectedUserTemplates()}
                   disabled={effectiveSelectedUserTemplateIds.length === 0}
-                  className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className={libraryDangerButtonDisabledClass}
+                  title={effectiveSelectedUserTemplateIds.length === 0 ? deleteSelectedDisabledReason : "Delete selected templates"}
                 >
                   Delete selected ({effectiveSelectedUserTemplateIds.length})
                 </button>
+                {libraryTemplateSourceMode === "user" && selectableUserTemplateIds.length > 0 && (
+                  <button
+                    onClick={toggleSelectAllVisibleUsers}
+                    className={libraryActionButtonClass}
+                  >
+                    {allVisibleUsersSelected ? "Clear selection" : "Select all"}
+                  </button>
+                )}
               </div>
-              {libraryTemplateSourceMode === "user" && selectableUserTemplateIds.length > 0 && (
-                <button
-                  onClick={toggleSelectAllVisibleUsers}
-                  className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-white"
-                >
-                  {allVisibleUsersSelected ? "Unselect all" : "Select all"}
-                </button>
-              )}
             </div>
+
           )}
           <div className="max-h-72 space-y-1 overflow-auto pr-1">
             {libraryTab === "documents" ? (
               filteredDocuments.length === 0 ? (
-                <p className="rounded-lg border border-dashed px-2 py-3 text-center text-xs text-slate-500">
+                <p className={libraryEmptyStateClass}>
                   No documents found.
                 </p>
               ) : (
@@ -1628,13 +2503,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   >
                     <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
                     <p className="mt-0.5 text-[10px] text-slate-500">
-                      {doc.format.toUpperCase()} 路 {new Date(doc.updatedAt).toLocaleString()}
+                      {doc.format.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
                     </p>
                   </button>
                 ))
               )
             ) : sortedFilteredTemplates.length === 0 ? (
-              <p className="rounded-lg border border-dashed px-2 py-3 text-center text-xs text-slate-500">
+              <p className={libraryEmptyStateClass}>
                 No templates found.
               </p>
             ) : (
@@ -1649,14 +2524,33 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                         className="flex-1 text-left"
                       >
                         <p className="text-xs font-medium text-slate-800">{template.name}</p>
-                        {isRecentTemplate && (
-                          <span className="mt-1 inline-block rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                            Recent
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                            {template.difficulty}
                           </span>
+                          <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                            {isUserTemplate ? "My template" : "Built-in"}
+                          </span>
+                          {isRecentTemplate && (
+                            <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                              Recent
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-500">Category: {template.category}</p>
+                        <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">{template.description}</p>
+                        {(template.tags ?? []).length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {(template.tags ?? []).slice(0, 3).map((tag) => (
+                              <span
+                                key={`${template.id}-library-tag-${tag}`}
+                                className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"
+                              >
+                                #{tag}
+                              </span>
+                            ))}
+                          </div>
                         )}
-                        <p className="mt-0.5 text-[10px] text-slate-500">
-                          {template.category} | {isUserTemplate ? "My Template" : "Built-in"}
-                        </p>
                       </button>
                       {isUserTemplate && (
                         <div className="flex items-center gap-1">
@@ -1759,16 +2653,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 </div>
               )}
 
-              {sourceError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                  {sourceError}
-                </div>
-              )}
-              {sourceNotice && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
-                  {sourceNotice}
-                </div>
-              )}
+              <IssueCenter issues={sourceIssues} />
 
               <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-white"}`}>
                 <div className="mb-2 text-xs font-medium text-slate-500">Paste CSV text</div>
@@ -1824,7 +2709,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   Apply Pasted JSON
                 </button>
                 {pastedJsonResult?.ok && (
-                  <div className="mt-2 rounded border bg-white p-2">
+                  <div className={rightPanelCardClass}>
                     <div className="mb-1 text-[11px] font-medium text-slate-600">JSON Links Preview (top 5)</div>
                     <table className="min-w-full text-left text-[11px]">
                       <thead>
@@ -1910,9 +2795,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-medium text-slate-600">Mapping Presets</p>
                       <button
-                        onClick={saveMappingPreset}
+                        onClick={() => void saveMappingPreset()}
                         disabled={sourceMappingIssues.length > 0}
-                        title={sourceMappingIssues.length > 0 ? sourceMappingIssues[0] : ""}
+                        title={sourceMappingIssues.length > 0 ? sourceMappingIssues[0] : "Save current mapping preset"}
                         className="rounded border px-2 py-1 text-[11px] text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Save Current Mapping
@@ -1929,7 +2814,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                             <button
                               onClick={() => applyMappingPreset(preset.id)}
                               disabled={!presetCompatibilityById.get(preset.id)?.ok}
-                              title={presetCompatibilityById.get(preset.id)?.reason || ""}
+                              title={presetCompatibilityById.get(preset.id)?.reason || "Apply preset mapping"}
                               className="flex-1 rounded border px-2 py-1 text-left text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               {preset.name}
@@ -1937,6 +2822,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                             <button
                               onClick={() => removeMappingPreset(preset.id)}
                               className="rounded border px-2 py-1 text-[11px] text-red-600"
+                              title="Delete preset mapping"
                             >
                               Delete
                             </button>
@@ -2050,6 +2936,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           onClick={() => setSourcePage((p) => Math.max(1, p - 1))}
                           className="rounded border px-2 py-0.5 text-[11px]"
                           disabled={sourcePage <= 1}
+                          title={sourcePage <= 1 ? "Already at first page." : "Previous page"}
                         >
                           Prev
                         </button>
@@ -2057,6 +2944,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           onClick={() => setSourcePage((p) => Math.min(totalSourcePages, p + 1))}
                           className="rounded border px-2 py-0.5 text-[11px]"
                           disabled={sourcePage >= totalSourcePages}
+                          title={sourcePage >= totalSourcePages ? "Already at last page." : "Next page"}
                         >
                           Next
                         </button>
@@ -2097,7 +2985,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   <button
                     onClick={applyMappingToEditor}
                     disabled={!canApplyMapping}
-                    className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    className={sourcePrimaryActionClass}
+                    title={!canApplyMapping ? (sourceMappingIssues[0] || "No valid rows with current mapping/policy.") : "Apply mapped data to editor"}
                   >
                     Apply Mapping to Editor ({sourcePreviewMode.toUpperCase()})
                   </button>
@@ -2126,6 +3015,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 <SankeyMonacoEditor
                   value={currentDoc.editorText}
                   format={currentDoc.format}
+                  theme={currentDoc.style.theme}
                   onChange={setEditorText}
                   marker={parseIssue}
                 />
@@ -2133,11 +3023,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </div>
           )}
 
-          {parseError ? (
-            <div className="border-t bg-red-50 px-4 py-3 text-xs text-red-700">{parseError}</div>
-          ) : (
-            <div className="border-t bg-emerald-50 px-4 py-3 text-xs text-emerald-700">Data is valid.</div>
-          )}
+          <IssueCenter issues={editorIssues} className="border-t px-4 py-3" />
         </aside>
 
         <main className={canvasContainerClass}>
@@ -2198,7 +3084,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: effectivePerformanceMode === "performance" ? 0.05 : 0.35 }}
+            transition={{ duration: performanceProfile.shouldReduceMotion ? 0.03 : 0.35 }}
             className="h-full"
           >
             <SankeyCanvas
@@ -2275,9 +3161,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               Studio
             </button>
           </div>
+          <IssueCenter issues={canvasActionIssues} />
           {rightPanelTab === "studio" && (
             <>
-          <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
+          <div className={rightPanelSectionClass}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Studio Settings</p>
             <label className="mt-2 block text-xs text-slate-600">
               Default Theme
@@ -2289,9 +3176,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     defaultTheme: event.target.value as "light" | "dark",
                   }))
                 }
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
@@ -2307,9 +3192,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     defaultPerformanceMode: event.target.value as PerformanceMode,
                   }))
                 }
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value="auto">Auto</option>
                 <option value="quality">Quality</option>
@@ -2327,9 +3210,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     defaultExportFileTemplate: event.target.value || "{title}-{date}",
                   }))
                 }
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               />
             </label>
             <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
@@ -2356,16 +3237,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </button>
           </div>
 
-          <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
+          <div className={rightPanelSectionClass}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Performance</p>
             <label className="mt-2 block text-xs text-slate-600">
               Mode
               <select
                 value={performanceMode}
                 onChange={(event) => setPerformanceMode(event.target.value as PerformanceMode)}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value="auto">Auto</option>
                 <option value="quality">Quality</option>
@@ -2376,17 +3255,45 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             <p className="mt-2 text-[11px] text-slate-500">
               Graph: {graphMetrics.nodes} nodes, {graphMetrics.links} links
             </p>
-            <p className="mt-1 text-[11px] text-slate-500">Effective: {effectivePerformanceMode}</p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              Tier: {performanceProfile.tier} | Effective: {effectivePerformanceMode}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              Recommended: {performanceProfile.recommendedMode}
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-1">
+              <button
+                onClick={applyRecommendedPerformanceMode}
+                disabled={performanceMode === performanceProfile.recommendedMode}
+                className="rounded border bg-white px-2 py-1 text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                title={performanceMode === performanceProfile.recommendedMode ? "Already using recommended mode." : "Switch to recommended performance mode"}
+              >
+                Use Recommended
+              </button>
+              <button
+                onClick={switchToAutoPerformanceMode}
+                disabled={performanceMode === "auto"}
+                className="rounded border bg-white px-2 py-1 text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                title={performanceMode === "auto" ? "Already in auto mode." : "Switch back to auto mode"}
+              >
+                Back to Auto
+              </button>
+            </div>
+            <div className={`mt-2 rounded border px-2 py-1 text-[11px] ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}>
+              <p>Hints: labels {renderHints.showLabels ? "on" : "off"}, hover {renderHints.enableLinkHover ? "on" : "off"}</p>
+              <p>Drag throttle: {renderHints.dragThrottleMs}ms, low-detail {renderHints.lowDetailDuringDrag ? "on" : "off"}</p>
+            </div>
+            <IssueCenter issues={performanceIssues} className="mt-2" />
           </div>
             </>
           )}
 
           {rightPanelTab === "inspect" && (
             <>
-          <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
+          <div className={rightPanelSectionClass}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Inspector</p>
             {selectedLink ? (
-              <div className="mt-2 rounded border bg-white p-2 text-xs text-slate-700">
+              <div className={`mt-2 ${innerPanelCardClass}`}>
                 <p className="font-medium text-slate-900">Link</p>
                 <p className="mt-1">
                   {selectedLink.source} -&gt; {selectedLink.target}
@@ -2398,7 +3305,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     type="color"
                     value={selectedLinkStyle?.color ?? "#3b82f6"}
                     onChange={(event) => patchSelectedLinkStyle({ color: event.target.value })}
-                    className="mt-1 h-8 w-full rounded border bg-white p-1"
+                    className={`mt-1 h-8 w-full rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}
                   />
                 </div>
                 <label className="mt-2 block text-[11px] text-slate-600">
@@ -2448,7 +3355,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 </button>
               </div>
             ) : selectedNodeIds.length > 0 ? (
-              <div className="mt-2 rounded border bg-white p-2 text-xs text-slate-700">
+              <div className={`mt-2 ${innerPanelCardClass}`}>
                 <p className="font-medium text-slate-900">
                   {selectedNodeIds.length === 1 ? "Node" : "Nodes"} ({selectedNodeIds.length})
                 </p>
@@ -2508,10 +3415,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             )}
           </div>
 
-          <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
+          <div className={rightPanelSectionClass}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Selection</p>
             <p className="mt-2 text-xs text-slate-600">
-              Selected nodes: {selectedNodeIds.length} {selectedLinkIndex != null ? "| 1 link" : ""}
+              Selected nodes: {selectedNodeIds.length}{selectedLinkIndex != null ? ", 1 link" : ""}
             </p>
             <div className="mt-2 grid grid-cols-3 gap-1">
               <button
@@ -2525,6 +3432,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <button
                 onClick={() => setTraceMode("upstream")}
                 disabled={selectedNodeIds.length === 0}
+                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Show upstream trace"}
                 className={`rounded border px-2 py-1 text-[11px] ${
                   traceMode === "upstream"
                     ? "border-slate-900 bg-slate-900 text-white"
@@ -2536,6 +3444,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <button
                 onClick={() => setTraceMode("downstream")}
                 disabled={selectedNodeIds.length === 0}
+                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Show downstream trace"}
                 className={`rounded border px-2 py-1 text-[11px] ${
                   traceMode === "downstream"
                     ? "border-slate-900 bg-slate-900 text-white"
@@ -2553,9 +3462,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 className="h-8 w-10 rounded border bg-white p-1"
               />
               <button
-                onClick={() => applyNodeColorToSelection(selectionColor)}
+                onClick={applySelectionColorWithNotice}
                 disabled={selectedNodeIds.length === 0}
-                className="flex-1 rounded border bg-white px-2 py-1 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Apply selected color to all selected nodes"}
+                className={`flex-1 rounded border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white text-slate-700"}`}
               >
                 Apply Color to Selection
               </button>
@@ -2567,37 +3477,100 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 min={10}
                 max={100}
                 value={batchSelectionOpacityValue}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setSelectionOpacity(next);
-                  applyNodeOpacityToSelection(next / 100);
-                }}
+                onChange={(event) => setSelectionOpacity(Number(event.target.value))}
                 className="mt-1 w-full"
               />
             </label>
             <button
-              onClick={clearSelectedNodeStyles}
+              onClick={applySelectionOpacityWithNotice}
               disabled={selectedNodeIds.length === 0}
-              className="mt-2 w-full rounded border bg-white px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+              title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Apply selected opacity to all selected nodes"}
+              className={`mt-2 w-full rounded border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white text-slate-700"}`}
+            >
+              Apply Opacity to Selection
+            </button>
+            <button
+              onClick={resetSelectedNodeStylesWithNotice}
+              disabled={selectedNodeIds.length === 0}
+              title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Reset selected node style overrides"}
+              className={`mt-2 w-full rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}
             >
               Reset Selected Node Styles
             </button>
             <button
-              onClick={clearSelection}
+              onClick={clearSelectionWithNotice}
               disabled={selectedNodeIds.length === 0 && selectedLinkIndex == null}
-              className="mt-2 w-full rounded border bg-white px-2 py-1 text-xs text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+              title={selectedNodeIds.length === 0 && selectedLinkIndex == null ? "Select a node or link first." : "Clear current selection"}
+              className={`mt-2 w-full rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}
             >
               Clear Selection
             </button>
-            <p className="mt-2 text-[10px] text-slate-500">
-              Shift+click for multi-select, drag on blank canvas for box-select.
-            </p>
+            <div className={rightPanelNoteCardClass}>
+              <div className="flex items-center justify-between gap-2">
+                <span>Shift+click multi-select. Drag blank area for box-select.</span>
+                <button
+                  onClick={() => setShowShortcutHints((value) => !value)}
+                  className={`rounded border px-2 py-0.5 text-[10px] font-medium ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-300" : "text-slate-600"}`}
+                >
+                  {showShortcutHints ? "Hide" : "Show"} shortcuts
+                </button>
+              </div>
+              {showShortcutHints && (
+                <div className={`mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] ${isDarkTheme ? "text-slate-300" : "text-slate-600"}`}>
+                  <span>Ctrl/Cmd+A</span><span>Select all nodes</span>
+                  <span>Ctrl/Cmd+Shift+L</span><span>Apply auto-layout</span>
+                  <span>Ctrl/Cmd+1 / 2</span><span>Switch Source / Editor</span>
+                  <span>Delete / Backspace</span><span>Clear selected styles</span>
+                  <span>Shift+?</span><span>Toggle this hint panel</span>
+                  <span>Esc</span><span>Clear current selection</span>
+                </div>
+              )}
+            </div>
           </div>
             </>
           )}
 
           {rightPanelTab === "style" && (
             <>
+          <div className={rightPanelSectionClass}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Style Presets</p>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={newStylePresetName}
+                onChange={(event) => setNewStylePresetName(event.target.value)}
+                placeholder="Preset name"
+                className={rightPanelInlineFieldClass}
+              />
+              <button
+                onClick={() => void saveCurrentStylePreset()}
+                className={`h-8 ${rightPanelActionButtonSmallClass}`}
+              >
+                Save Current
+              </button>
+            </div>
+            <div className="mt-2 space-y-1">
+              {allStylePresets.map((preset) => (
+                <div key={preset.id} className="flex items-center gap-1">
+                  <button
+                    onClick={() => applyStylePreset(preset)}
+                    className={`${rightPanelActionButtonClass} flex-1 text-left`}
+                  >
+                    {preset.name}
+                    {preset.builtIn ? " (Built-in)" : ""}
+                  </button>
+                  {!preset.builtIn && (
+                    <button
+                      onClick={() => void removeStylePreset(preset.id)}
+                      className={`rounded border px-2 py-1 text-[10px] ${isDarkTheme ? "border-red-500/60 text-red-300 hover:bg-red-500/10" : "text-red-600 hover:bg-red-50"}`}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Appearance</p>
             <label className="mt-2 block text-xs text-slate-600">
@@ -2607,9 +3580,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 onChange={(event) =>
                   patchStyle({ theme: event.target.value as "light" | "dark" })
                 }
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
@@ -2624,9 +3595,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     palette: event.target.value as "classic" | "ocean" | "sunset",
                   })
                 }
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value="classic">Classic</option>
                 <option value="ocean">Ocean</option>
@@ -2730,9 +3699,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     | "System Sans",
                 })
               }
-              className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-              }`}
+              className={rightPanelFieldClass}
             >
               <option value="Roboto">Roboto</option>
               <option value="Google Sans">Google Sans</option>
@@ -2745,7 +3712,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               type="color"
               value={currentDoc.style.labelColor}
               onChange={(event) => patchStyle({ labelColor: event.target.value })}
-              className="mt-1 h-8 w-full rounded border bg-white p-1"
+              className={`mt-1 h-8 w-full rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}
             />
           </label>
           <label className="block text-xs text-slate-600">
@@ -2755,9 +3722,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               onChange={(event) =>
                 patchStyle({ labelPosition: event.target.value as "inside" | "outside" })
               }
-              className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                isDarkTheme ? "border-slate-600 bg-slate-800 text-slate-100" : "bg-white"
-              }`}
+              className={rightPanelFieldClass}
             >
               <option value="outside">Outside</option>
               <option value="inside">Inside</option>
@@ -2767,10 +3732,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </>
           )}
           {rightPanelTab === "export" && (
-          <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
+          <div className={rightPanelSectionClass}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Export Settings</p>
+            <IssueCenter issues={exportIssues} className="mt-2" />
             {exportPreviewUrl && (
-              <div className="mt-2 overflow-hidden rounded border bg-white p-1">
+              <div className={`mt-2 overflow-hidden rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}>
                 <NextImage
                   src={exportPreviewUrl}
                   alt="Export preview"
@@ -2788,14 +3754,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   <div key={preset.id} className="flex items-center gap-1">
                     <button
                       onClick={() => applyExportPreset(preset)}
-                      className="flex-1 rounded border bg-white px-2 py-1 text-left text-[10px] font-medium text-slate-700"
+                      className={`${rightPanelActionButtonClass} flex-1 text-left text-[10px]`}
                     >
                       {preset.name} ({preset.width}x{preset.height}, p{preset.padding ?? 0}, {preset.pngScale ?? 1}x)
                     </button>
                     {!builtIn && (
                       <button
                         onClick={() => removeCustomPreset(preset.id)}
-                        className="rounded border bg-white p-1 text-slate-500 hover:text-red-600"
+                        className={`rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-300 hover:text-red-400" : "bg-white text-slate-500 hover:text-red-600"}`}
                         title="Delete preset"
                       >
                         <Trash2 className="h-3 w-3" />
@@ -2810,13 +3776,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 value={newPresetName}
                 onChange={(event) => setNewPresetName(event.target.value)}
                 placeholder="New preset name"
-                className={`flex-1 rounded border px-2 py-1 text-[11px] ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={`${rightPanelFieldCompactClass} mt-0 flex-1`}
               />
               <button
                 onClick={saveCurrentAsPreset}
-                className="rounded border bg-white px-2 py-1 text-[11px] font-medium text-slate-700"
+                className={rightPanelActionButtonClass}
               >
                 Save
               </button>
@@ -2829,9 +3793,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 max={6000}
                 value={exportWidth}
                 onChange={(event) => setExportWidth(Number(event.target.value) || 1200)}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               />
             </label>
             <label className="mt-2 block text-xs text-slate-600">
@@ -2842,9 +3804,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 max={6000}
                 value={exportHeight}
                 onChange={(event) => setExportHeight(Number(event.target.value) || 700)}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               />
             </label>
             <label className="mt-2 block text-xs text-slate-600">
@@ -2855,9 +3815,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 max={300}
                 value={exportPadding}
                 onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               />
             </label>
             <label className="mt-2 block text-xs text-slate-600">
@@ -2865,9 +3823,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <select
                 value={exportPngScale}
                 onChange={(event) => setExportPngScale(Number(event.target.value))}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
               >
                 <option value={1}>1x</option>
                 <option value={2}>2x</option>
@@ -2880,16 +3836,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <input
                 value={exportFileTemplate}
                 onChange={(event) => setExportFileTemplate(event.target.value)}
-                className={`mt-1 w-full rounded border px-2 py-1 text-xs ${
-                  isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white"
-                }`}
+                className={rightPanelFieldClass}
                 placeholder="{title}-{date}"
               />
               <span className="mt-1 block text-[10px] text-slate-400">
                 Use {"{title}"} and {"{date}"}
               </span>
             </label>
-            <div className="mt-2 rounded border bg-white p-2">
+            <div className={rightPanelCardClass}>
               <p className="text-[11px] font-medium text-slate-600">Export All Options</p>
               <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] text-slate-600">
                 <label className="inline-flex items-center gap-1">
@@ -2928,7 +3882,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 <select
                   value={exportAllNamingMode}
                   onChange={(event) => setExportAllNamingMode(event.target.value as "same" | "suffix")}
-                  className="mt-1 w-full rounded border px-2 py-1 text-[11px]"
+                  className={rightPanelFieldCompactClass}
                 >
                   <option value="suffix">Append format suffix</option>
                   <option value="same">Use same base name</option>
@@ -2946,10 +3900,86 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </div>
           )}
         </aside>
+      {dialogNode}
+
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

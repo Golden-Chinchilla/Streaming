@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { create } from "zustand";
 import { ParseIssue, parseSankeyText, parseSankeyTextDetailed } from "@/lib/parse";
@@ -7,6 +7,11 @@ import { DataFormat, SankeyDocument, SankeyGraph, SankeyStyle } from "@/lib/type
 import { linkStyleKey } from "@/lib/utils";
 
 const HISTORY_LIMIT = 60;
+const TEXT_HISTORY_GROUP_WINDOW_MS = 900;
+const TEXT_PARSE_DEBOUNCE_MS = 220;
+
+let lastTextHistoryAt = 0;
+let textParseTimer: ReturnType<typeof setTimeout> | null = null;
 
 type EditorState = {
   document: SankeyDocument;
@@ -29,6 +34,7 @@ type EditorState = {
   syncFromEditor: () => void;
   patchStyle: (stylePatch: Partial<SankeyStyle>) => void;
   setNodePosition: (nodeId: string, y: number) => void;
+  setNodePositions: (positions: Record<string, number>) => void;
   clearNodePositions: () => void;
   setSelectedNodeIds: (ids: string[]) => void;
   setSelectedLinkIndex: (index: number | null) => void;
@@ -116,6 +122,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   historyPast: [],
   historyFuture: [],
   initialize: (doc) => {
+    if (textParseTimer) {
+      clearTimeout(textParseTimer);
+      textParseTimer = null;
+    }
+    lastTextHistoryAt = 0;
     const normalizedDoc = normalizeDocument(doc);
     const parsed = parseDocument(normalizedDoc);
     if (!parsed.graph) {
@@ -166,25 +177,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   setEditorText: (text) => {
     const { autoSync } = get();
+    const now = Date.now();
+
     set((state) => {
       const nextDocument = withTimestamp({ ...state.document, editorText: text });
-      if (!autoSync) {
-        return {
-          document: nextDocument,
-          historyPast: addPastSnapshot(state.historyPast, state.document),
-          historyFuture: [],
-        };
+      const shouldCreateHistoryPoint =
+        state.historyPast.length === 0 || now - lastTextHistoryAt > TEXT_HISTORY_GROUP_WINDOW_MS;
+
+      if (shouldCreateHistoryPoint) {
+        lastTextHistoryAt = now;
       }
-      const parsed = parseDocument(nextDocument);
+
       return {
         document: nextDocument,
-        graph: parsed.graph ?? state.graph,
-        parseError: parsed.parseError,
-        parseIssue: parsed.parseIssue,
-        historyPast: addPastSnapshot(state.historyPast, state.document),
-        historyFuture: [],
+        historyPast: shouldCreateHistoryPoint
+          ? addPastSnapshot(state.historyPast, state.document)
+          : state.historyPast,
+        historyFuture: shouldCreateHistoryPoint ? [] : state.historyFuture,
       };
     });
+
+    if (!autoSync) return;
+
+    if (textParseTimer) {
+      clearTimeout(textParseTimer);
+    }
+
+    textParseTimer = setTimeout(() => {
+      const state = get();
+      const parsed = parseDocument(state.document);
+      set((current) => ({
+        graph: parsed.graph ?? current.graph,
+        parseError: parsed.parseError,
+        parseIssue: parsed.parseIssue,
+      }));
+    }, TEXT_PARSE_DEBOUNCE_MS);
   },
   setAutoSync: (value) => set({ autoSync: value }),
   syncFromEditor: () => {
@@ -223,6 +250,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...state.document,
         nodePositions: { ...state.document.nodePositions, [nodeId]: y },
       }),
+    })),
+  setNodePositions: (positions) =>
+    set((state) => ({
+      document: withTimestamp({
+        ...state.document,
+        nodePositions: { ...positions },
+      }),
+      historyPast: addPastSnapshot(state.historyPast, state.document),
+      historyFuture: [],
     })),
   clearNodePositions: () =>
     set((state) => ({
@@ -370,3 +406,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
 }));
+
+
+
+
+
+

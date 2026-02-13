@@ -1,4 +1,4 @@
-export type DataFormat = "json" | "csv";
+﻿export type DataFormat = "json" | "csv";
 export type PerformanceMode = "auto" | "quality" | "balanced" | "performance";
 
 export type SankeyLinkInput = {
@@ -45,6 +45,7 @@ export type TemplateSummary = {
   category: string;
   difficulty: "Easy" | "Medium" | "Advanced";
   description: string;
+  tags?: string[];
   accent: string;
   document: Omit<SankeyDocument, "id" | "updatedAt">;
 };
@@ -55,3 +56,4 @@ export type AppPreferences = {
   defaultExportTransparentBg: boolean;
   defaultExportFileTemplate: string;
 };
+

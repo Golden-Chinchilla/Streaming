@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Plus, Search } from "lucide-react";
+import { ArrowRight, Plus, Search, Trash2 } from "lucide-react";
 import {
+  clearRecentTemplateIds,
   deleteUserTemplate,
+  deleteUserTemplates,
   loadRecentDocuments,
+  loadRecentTemplateIds,
   loadUserTemplates,
   upsertUserTemplate,
 } from "@/lib/storage";
@@ -13,6 +16,8 @@ import { templateList } from "@/lib/templates";
 import { SankeyDocument, TemplateSummary } from "@/lib/types";
 
 type SortMode = "name" | "difficulty" | "category";
+type SourceMode = "all" | "user" | "builtin";
+type DifficultyFilter = "All" | "Easy" | "Medium" | "Advanced";
 
 const difficultyRank: Record<string, number> = {
   Easy: 1,
@@ -24,16 +29,35 @@ export function TemplateGallery() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [sortMode, setSortMode] = useState<SortMode>("name");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("all");
+  const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>("All");
+  const [tagFilter, setTagFilter] = useState("All");
   const [recentDocs, setRecentDocs] = useState<SankeyDocument[]>([]);
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
+  const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
+
+  const refreshData = async () => {
+    const [items, templateIds, templates] = await Promise.all([
+      loadRecentDocuments(),
+      loadRecentTemplateIds(),
+      loadUserTemplates(),
+    ]);
+    setRecentDocs(items);
+    setRecentTemplateIds(templateIds);
+    setUserTemplates(templates);
+  };
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([loadRecentDocuments(), loadUserTemplates()]).then(([items, templates]) => {
-      if (!mounted) return;
-      setRecentDocs(items);
-      setUserTemplates(templates);
-    });
+    Promise.all([loadRecentDocuments(), loadRecentTemplateIds(), loadUserTemplates()]).then(
+      ([items, templateIds, templates]) => {
+        if (!mounted) return;
+        setRecentDocs(items);
+        setRecentTemplateIds(templateIds);
+        setUserTemplates(templates);
+      },
+    );
     return () => {
       mounted = false;
     };
@@ -43,25 +67,61 @@ export function TemplateGallery() {
     setSearch("");
     setCategory("All");
     setSortMode("name");
+    setSourceMode("all");
+    setDifficultyFilter("All");
+    setTagFilter("All");
   };
 
-  const categories = useMemo(() => {
-    const allTemplates = [...templateList, ...userTemplates];
-    return ["All", ...new Set(allTemplates.map((template) => template.category))];
+  const userTemplateIdSet = useMemo(() => {
+    return new Set(userTemplates.map((item) => item.id));
   }, [userTemplates]);
+
+  const effectiveSelectedUserTemplateIds = useMemo(() => {
+    return selectedUserTemplateIds.filter((id) => userTemplateIdSet.has(id));
+  }, [selectedUserTemplateIds, userTemplateIdSet]);
+  const allTemplates = useMemo<TemplateSummary[]>(() => {
+    return [...templateList, ...userTemplates];
+  }, [userTemplates]);
+
+  const categories = useMemo(() => {
+    return ["All", ...new Set(allTemplates.map((template) => template.category))];
+  }, [allTemplates]);
+
+  const tags = useMemo(() => {
+    return [
+      "All",
+      ...new Set(
+        allTemplates
+          .flatMap((template) => template.tags ?? [])
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    ];
+  }, [allTemplates]);
 
   const filteredTemplates = useMemo<TemplateSummary[]>(() => {
     const keyword = search.trim().toLowerCase();
-    const allTemplates = [...templateList, ...userTemplates];
-
     const filtered = allTemplates.filter((template) => {
+      const isUser = template.id.startsWith("user-");
+      const matchSource =
+        sourceMode === "all" || (sourceMode === "user" ? isUser : !isUser);
+      if (!matchSource) return false;
+
       const matchCategory = category === "All" || template.category === category;
       if (!matchCategory) return false;
+
+      const matchDifficulty = difficultyFilter === "All" || template.difficulty === difficultyFilter;
+      if (!matchDifficulty) return false;
+
+      const normalizedTags = (template.tags ?? []).map((tag) => tag.toLowerCase());
+      const matchTag = tagFilter === "All" || normalizedTags.includes(tagFilter.toLowerCase());
+      if (!matchTag) return false;
       if (!keyword) return true;
       return (
         template.name.toLowerCase().includes(keyword) ||
         template.description.toLowerCase().includes(keyword) ||
         template.category.toLowerCase().includes(keyword)
+        || normalizedTags.some((tag) => tag.includes(keyword))
       );
     });
 
@@ -74,13 +134,62 @@ export function TemplateGallery() {
       }
       return a.name.localeCompare(b.name);
     });
-  }, [category, search, sortMode, userTemplates]);
+  }, [allTemplates, category, difficultyFilter, search, sortMode, sourceMode, tagFilter]);
+
+  const recentTemplates = useMemo(() => {
+    if (recentTemplateIds.length === 0) return [] as TemplateSummary[];
+    const rank = new Map(recentTemplateIds.map((id, index) => [id, index]));
+    return allTemplates
+      .filter((template) => rank.has(template.id))
+      .sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
+  }, [allTemplates, recentTemplateIds]);
+
+  const userTemplateIdsInFiltered = useMemo(() => {
+    return filteredTemplates
+      .filter((template) => template.id.startsWith("user-"))
+      .map((template) => template.id);
+  }, [filteredTemplates]);
+
+  const allFilteredUsersSelected =
+    userTemplateIdsInFiltered.length > 0 &&
+    userTemplateIdsInFiltered.every((id) => effectiveSelectedUserTemplateIds.includes(id));
+
+  const toggleSelectAllFilteredUsers = () => {
+    if (allFilteredUsersSelected) {
+      setSelectedUserTemplateIds((prev) =>
+        prev.filter((id) => !userTemplateIdsInFiltered.includes(id)),
+      );
+      return;
+    }
+    setSelectedUserTemplateIds((prev) => {
+      const next = new Set(prev);
+      for (const id of userTemplateIdsInFiltered) next.add(id);
+      return Array.from(next);
+    });
+  };
 
   const removeUserTemplate = async (templateId: string) => {
     const confirmed = window.confirm("Delete this template?");
     if (!confirmed) return;
     await deleteUserTemplate(templateId);
-    setUserTemplates((prev) => prev.filter((item) => item.id !== templateId));
+    await refreshData();
+  };
+
+  const removeSelectedUserTemplates = async () => {
+    if (effectiveSelectedUserTemplateIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${effectiveSelectedUserTemplateIds.length} selected templates?`,
+    );
+    if (!confirmed) return;
+    await deleteUserTemplates(effectiveSelectedUserTemplateIds);
+    setSelectedUserTemplateIds([]);
+    await refreshData();
+  };
+
+  const clearRecentTemplates = async () => {
+    if (recentTemplateIds.length === 0) return;
+    await clearRecentTemplateIds();
+    setRecentTemplateIds([]);
   };
 
   const editUserTemplate = async (template: TemplateSummary) => {
@@ -90,14 +199,26 @@ export function TemplateGallery() {
     const description =
       window.prompt("Template description", template.description)?.trim() ||
       "Custom template from current document";
+    const tagsInput =
+      window.prompt("Template tags (comma separated)", (template.tags ?? []).join(", "))?.trim() || "";
+    const tags = Array.from(
+      new Set(
+        tagsInput
+          .split(",")
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+
     const updated: TemplateSummary = {
       ...template,
       name,
       category,
       description,
+      tags: tags.length > 0 ? tags : undefined,
     };
     await upsertUserTemplate(updated);
-    setUserTemplates((prev) => [updated, ...prev.filter((item) => item.id !== updated.id)]);
+    await refreshData();
   };
 
   return (
@@ -136,7 +257,36 @@ export function TemplateGallery() {
                 >
                   <p className="text-sm font-semibold text-slate-900">{doc.title || "Untitled Diagram"}</p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {doc.format.toUpperCase()} · {new Date(doc.updatedAt).toLocaleString()}
+                    {doc.format.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {recentTemplates.length > 0 && (
+          <section className="mb-8">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-medium text-slate-900">Recent templates</h2>
+              <button
+                onClick={clearRecentTemplates}
+                className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear Recent
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {recentTemplates.slice(0, 6).map((template) => (
+                <Link
+                  key={template.id}
+                  href={`/editor?template=${encodeURIComponent(template.id)}`}
+                  className="rounded-xl border bg-white px-4 py-3 shadow-sm transition hover:border-blue-300"
+                >
+                  <p className="text-sm font-semibold text-slate-900">{template.name}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {template.category} | {template.id.startsWith("user-") ? "My Template" : "Built-in"}
                   </p>
                 </Link>
               ))}
@@ -172,6 +322,36 @@ export function TemplateGallery() {
               />
             </div>
             <select
+              value={sourceMode}
+              onChange={(event) => setSourceMode(event.target.value as SourceMode)}
+              className="rounded-lg border bg-white px-3 py-2 text-sm"
+            >
+              <option value="all">Source: All</option>
+              <option value="user">Source: My Template</option>
+              <option value="builtin">Source: Built-in</option>
+            </select>
+            <select
+              value={difficultyFilter}
+              onChange={(event) => setDifficultyFilter(event.target.value as DifficultyFilter)}
+              className="rounded-lg border bg-white px-3 py-2 text-sm"
+            >
+              <option value="All">Difficulty: All</option>
+              <option value="Easy">Difficulty: Easy</option>
+              <option value="Medium">Difficulty: Medium</option>
+              <option value="Advanced">Difficulty: Advanced</option>
+            </select>
+            <select
+              value={tagFilter}
+              onChange={(event) => setTagFilter(event.target.value)}
+              className="rounded-lg border bg-white px-3 py-2 text-sm"
+            >
+              {tags.map((tag) => (
+                <option key={`tag-filter-${tag}`} value={tag}>
+                  Tag: {tag}
+                </option>
+              ))}
+            </select>
+            <select
               value={sortMode}
               onChange={(event) => setSortMode(event.target.value as SortMode)}
               className="rounded-lg border bg-white px-3 py-2 text-sm"
@@ -180,6 +360,13 @@ export function TemplateGallery() {
               <option value="difficulty">Sort: Difficulty</option>
               <option value="category">Sort: Category</option>
             </select>
+            <button
+              onClick={removeSelectedUserTemplates}
+              disabled={effectiveSelectedUserTemplateIds.length === 0}
+              className="rounded-lg border px-3 py-2 text-sm text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Delete Selected ({effectiveSelectedUserTemplateIds.length})
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -196,6 +383,14 @@ export function TemplateGallery() {
                 {item}
               </button>
             ))}
+            {sourceMode === "user" && userTemplateIdsInFiltered.length > 0 && (
+              <button
+                onClick={toggleSelectAllFilteredUsers}
+                className="rounded-lg border px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                {allFilteredUsersSelected ? "Unselect All" : "Select All"}
+              </button>
+            )}
           </div>
 
           <div className="flex items-center justify-between">
@@ -218,57 +413,92 @@ export function TemplateGallery() {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredTemplates.map((template) => (
-                <Link
-                  key={template.id}
-                  href={`/editor?template=${template.id}`}
-                  className="group overflow-hidden rounded-2xl border bg-white shadow-sm transition hover:border-blue-300 hover:shadow-lg"
-                >
-                  <div className={`relative h-44 bg-gradient-to-br ${template.accent} p-5 text-white`}>
-                    <span className="rounded-md bg-white/20 px-2 py-1 text-[11px] font-semibold uppercase">
-                      {template.difficulty}
-                    </span>
-                    {template.id.startsWith("user-") && (
-                      <span className="ml-2 rounded-md bg-black/20 px-2 py-1 text-[10px] font-semibold uppercase">
-                        My Template
+              {filteredTemplates.map((template) => {
+                const isUser = template.id.startsWith("user-");
+                const selected = effectiveSelectedUserTemplateIds.includes(template.id);
+                return (
+                  <Link
+                    key={template.id}
+                    href={`/editor?template=${encodeURIComponent(template.id)}`}
+                    className="group overflow-hidden rounded-2xl border bg-white shadow-sm transition hover:border-blue-300 hover:shadow-lg"
+                  >
+                    <div className={`relative h-44 bg-gradient-to-br ${template.accent} p-5 text-white`}>
+                      <span className="rounded-md bg-white/20 px-2 py-1 text-[11px] font-semibold uppercase">
+                        {template.difficulty}
                       </span>
-                    )}
-                    <div className="absolute bottom-4 left-5 right-5">
-                      <p className="text-sm opacity-85">{template.category}</p>
-                      <h3 className="text-xl font-semibold">{template.name}</h3>
-                    </div>
-                  </div>
-                  <div className="p-4">
-                    <p className="text-sm text-slate-500">{template.description}</p>
-                    <div className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-blue-600">
-                      Use template
-                      <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
-                    </div>
-                    {template.id.startsWith("user-") && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          onClick={(event) => {
-                            event.preventDefault();
-                            editUserTemplate(template);
-                          }}
-                          className="rounded border px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={(event) => {
-                            event.preventDefault();
-                            removeUserTemplate(template.id);
-                          }}
-                          className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
-                        >
-                          Delete
-                        </button>
+                      <span className="ml-2 rounded-md bg-black/20 px-2 py-1 text-[10px] font-semibold uppercase">
+                        {isUser ? "My Template" : "Built-in"}
+                      </span>
+                      {recentTemplateIds.includes(template.id) && (
+                        <span className="ml-2 rounded-md bg-blue-500/30 px-2 py-1 text-[10px] font-semibold uppercase">
+                          Recent
+                        </span>
+                      )}
+                      <div className="absolute bottom-4 left-5 right-5">
+                        <p className="text-sm opacity-85">{template.category}</p>
+                        <h3 className="text-xl font-semibold">{template.name}</h3>
                       </div>
-                    )}
-                  </div>
-                </Link>
-              ))}
+                    </div>
+                    <div className="p-4">
+                      <p className="text-sm text-slate-500">{template.description}</p>
+                      {(template.tags ?? []).length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(template.tags ?? []).slice(0, 4).map((tag) => (
+                            <span
+                              key={`${template.id}-tag-${tag}`}
+                              className="rounded border bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-blue-600">
+                        Use template
+                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                      </div>
+                      {isUser && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onChange={() => {
+                              setSelectedUserTemplateIds((prev) => {
+                                if (prev.includes(template.id)) {
+                                  return prev.filter((id) => id !== template.id);
+                                }
+                                return [...prev, template.id];
+                              });
+                            }}
+                          />
+                          <button
+                            onClick={(event) => {
+                              event.preventDefault();
+                              editUserTemplate(template);
+                            }}
+                            className="rounded border px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={(event) => {
+                              event.preventDefault();
+                              removeUserTemplate(template.id);
+                            }}
+                            className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           )}
         </section>
@@ -276,3 +506,4 @@ export function TemplateGallery() {
     </div>
   );
 }
+

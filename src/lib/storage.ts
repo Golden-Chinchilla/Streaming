@@ -9,6 +9,7 @@ const CURRENT_DOC_KEY = "current-document";
 const CURRENT_DOC_ID_KEY = "current-document-id";
 const DOCUMENTS_KEY = "documents";
 const RECENT_DOCS_KEY = "recent-documents";
+const RECENT_TEMPLATE_IDS_KEY = "recent-template-ids";
 const USER_TEMPLATES_KEY = "user-templates";
 const APP_PREFERENCES_KEY = "app-preferences";
 const RECENT_LIMIT = 8;
@@ -61,6 +62,35 @@ export async function loadRecentDocuments() {
   );
 }
 
+export async function saveRecentTemplate(templateId: string) {
+  const db = await getDb();
+  const existing = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
+  const deduped = existing.filter((item) => item !== templateId);
+  const next = [templateId, ...deduped].slice(0, RECENT_LIMIT);
+  await db.put(STORE_NAME, next, RECENT_TEMPLATE_IDS_KEY);
+}
+
+export async function loadRecentTemplateIds() {
+  const db = await getDb();
+  return ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
+}
+
+export async function clearRecentTemplateIds() {
+  const db = await getDb();
+  await db.put(STORE_NAME, [], RECENT_TEMPLATE_IDS_KEY);
+}
+
+export async function deleteUserTemplates(templateIds: string[]) {
+  const idSet = new Set(templateIds);
+  const db = await getDb();
+  const templates = await loadUserTemplates();
+  const next = templates.filter((item) => !idSet.has(item.id));
+  await db.put(STORE_NAME, next, USER_TEMPLATES_KEY);
+
+  const recentTemplateIds = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
+  const nextRecentTemplateIds = recentTemplateIds.filter((id) => !idSet.has(id));
+  await db.put(STORE_NAME, nextRecentTemplateIds, RECENT_TEMPLATE_IDS_KEY);
+}
 export async function loadAllDocuments() {
   const db = await getDb();
   const docs = ((await db.get(STORE_NAME, DOCUMENTS_KEY)) as SankeyDocument[] | undefined) ?? [];
@@ -135,6 +165,10 @@ export async function deleteUserTemplate(templateId: string) {
   const templates = await loadUserTemplates();
   const next = templates.filter((item) => item.id !== templateId);
   await db.put(STORE_NAME, next, USER_TEMPLATES_KEY);
+
+  const recentTemplateIds = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
+  const nextRecentTemplateIds = recentTemplateIds.filter((id) => id !== templateId);
+  await db.put(STORE_NAME, nextRecentTemplateIds, RECENT_TEMPLATE_IDS_KEY);
 }
 
 export async function loadAppPreferences(): Promise<AppPreferences> {

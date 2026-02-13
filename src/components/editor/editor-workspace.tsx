@@ -22,16 +22,21 @@ import {
 } from "lucide-react";
 import { parseSankeyTextDetailed } from "@/lib/parse";
 import {
+  clearRecentTemplateIds,
   deleteDocumentById,
+  deleteUserTemplates,
+  deleteUserTemplate,
   loadAppPreferences,
   loadAllDocuments,
   loadCurrentDocument,
   loadDocumentById,
   loadUserTemplates,
+  loadRecentTemplateIds,
   loadUserTemplateById,
   saveCurrentDocument,
   saveAppPreferences,
   saveRecentDocument,
+  saveRecentTemplate,
   setCurrentDocumentId,
   upsertUserTemplate,
   upsertDocument,
@@ -47,7 +52,7 @@ import {
   TablePreview,
   transformRowsToCanonicalLinks,
 } from "@/lib/source-import";
-import { blankDocument, templateById } from "@/lib/templates";
+import { blankDocument, templateById, templateList } from "@/lib/templates";
 import {
   AppPreferences,
   DataFormat,
@@ -199,7 +204,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   );
   const [activeTab, setActiveTab] = useState<"source" | "editor">("editor");
   const [showDocuments, setShowDocuments] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<"documents" | "templates">("documents");
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryTemplateSourceMode, setLibraryTemplateSourceMode] = useState<
+    "all" | "user" | "builtin"
+  >("all");
   const [allDocuments, setAllDocuments] = useState<SankeyDocument[]>([]);
+  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
+  const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
+  const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [sourcePreview, setSourcePreview] = useState<TablePreview | null>(null);
   const [sourcePreviewMode, setSourcePreviewMode] = useState<"csv" | "json">("csv");
@@ -213,6 +226,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [valueMinWhenClamped, setValueMinWhenClamped] = useState(1);
   const [sourceFileName, setSourceFileName] = useState<string>("");
   const [sourceError, setSourceError] = useState<string>("");
+  const [importFlowAppliedCount, setImportFlowAppliedCount] = useState(0);
   const [pastedCsv, setPastedCsv] = useState<string>("");
   const [pastedJson, setPastedJson] = useState<string>("");
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
@@ -234,6 +248,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     html: true,
   });
   const [exportAllNamingMode, setExportAllNamingMode] = useState<"same" | "suffix">("suffix");
+  const [rightPanelTab, setRightPanelTab] = useState<"inspect" | "style" | "export" | "studio">("inspect");
   const [customExportPresets, setCustomExportPresets] = useState<ExportPreset[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -338,6 +353,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         initialize(nextDoc);
         await upsertDocument(nextDoc);
         await setCurrentDocumentId(nextDoc.id);
+        await saveRecentTemplate(template.id);
         if (isMounted) setHasHydrated(true);
         return;
       }
@@ -389,13 +405,78 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   useEffect(() => {
     if (!hasHydrated) return;
     let mounted = true;
-    loadAllDocuments().then((docs) => {
-      if (mounted) setAllDocuments(docs);
-    });
+    Promise.all([loadAllDocuments(), loadRecentTemplateIds(), loadUserTemplates()]).then(
+      ([docs, templateIds, templates]) => {
+        if (!mounted) return;
+        setAllDocuments(docs);
+        setRecentTemplateIds(templateIds);
+        setUserTemplates(templates);
+      },
+    );
     return () => {
       mounted = false;
     };
   }, [currentDoc.id, currentDoc.updatedAt, hasHydrated]);
+
+  const allTemplates = useMemo(() => {
+    return [...templateList, ...userTemplates];
+  }, [userTemplates]);
+
+  const filteredDocuments = useMemo(() => {
+    const keyword = librarySearch.trim().toLowerCase();
+    if (!keyword) return allDocuments;
+    return allDocuments.filter((doc) => {
+      const title = (doc.title || "Untitled Diagram").toLowerCase();
+      return title.includes(keyword) || doc.format.toLowerCase().includes(keyword);
+    });
+  }, [allDocuments, librarySearch]);
+
+  const recentTemplateIdSet = useMemo(() => {
+    return new Set(recentTemplateIds);
+  }, [recentTemplateIds]);
+
+  const filteredTemplates = useMemo(() => {
+    const keyword = librarySearch.trim().toLowerCase();
+    const bySource = allTemplates.filter((template) => {
+      if (libraryTemplateSourceMode === "all") return true;
+      const isUserTemplate = template.id.startsWith("user-");
+      return libraryTemplateSourceMode === "user" ? isUserTemplate : !isUserTemplate;
+    });
+    if (!keyword) return bySource;
+    return bySource.filter((template) => {
+      return (
+        template.name.toLowerCase().includes(keyword) ||
+        template.category.toLowerCase().includes(keyword) ||
+        template.description.toLowerCase().includes(keyword) ||
+        (template.tags ?? []).some((tag) => tag.toLowerCase().includes(keyword))
+      );
+    });
+  }, [allTemplates, librarySearch, libraryTemplateSourceMode]);
+
+  const sortedFilteredTemplates = useMemo(() => {
+    const rank = new Map(recentTemplateIds.map((id, index) => [id, index]));
+    return [...filteredTemplates].sort((a, b) => {
+      const rankA = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const rankB = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      if (rankA !== rankB) return rankA - rankB;
+      return a.name.localeCompare(b.name);
+    });
+  }, [filteredTemplates, recentTemplateIds]);
+
+  const selectableUserTemplateIds = useMemo(() => {
+    return sortedFilteredTemplates
+      .filter((template) => template.id.startsWith("user-"))
+      .map((template) => template.id);
+  }, [sortedFilteredTemplates]);
+
+  const effectiveSelectedUserTemplateIds = useMemo(() => {
+    const selectable = new Set(selectableUserTemplateIds);
+    return selectedUserTemplateIds.filter((id) => selectable.has(id));
+  }, [selectedUserTemplateIds, selectableUserTemplateIds]);
+
+  const allVisibleUsersSelected =
+    selectableUserTemplateIds.length > 0 &&
+    selectableUserTemplateIds.every((id) => effectiveSelectedUserTemplateIds.includes(id));
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -469,6 +550,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSelectedNodeIds(filtered);
     }
   }, [graph, selectedNodeIds, setSelectedNodeIds]);
+
+  useEffect(() => {
+    if (selectedNodeIds.length > 0) return;
+    if (traceMode !== "none") {
+      setTraceMode("none");
+    }
+  }, [selectedNodeIds, traceMode, setTraceMode]);
 
   useEffect(() => {
     if (selectedLinkIndex == null) return;
@@ -601,6 +689,102 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     () => mappingPresets.filter((item) => item.mode === sourcePreviewMode),
     [mappingPresets, sourcePreviewMode],
   );
+
+  const sourceMappingIssues = useMemo(() => {
+    if (!sourcePreview) return [] as string[];
+    const issues: string[] = [];
+    const headers = new Set(sourcePreview.headers);
+    const { source, target, value } = sourcePreview.mapping;
+
+    if (!source || !headers.has(source)) {
+      issues.push('Source column "' + (source || '(empty)') + '" is missing in current data.');
+    }
+    if (!target || !headers.has(target)) {
+      issues.push('Target column "' + (target || '(empty)') + '" is missing in current data.');
+    }
+    if (!value || !headers.has(value)) {
+      issues.push('Value column "' + (value || '(empty)') + '" is missing in current data.');
+    }
+    if (new Set([source, target, value]).size < 3) {
+      issues.push('Source, target, and value should map to three different columns.');
+    }
+
+    return issues;
+  }, [sourcePreview]);
+
+  const mappingTransformPreview = useMemo(() => {
+    if (!sourcePreview) return null;
+    if (sourceMappingIssues.length > 0) return null;
+    return transformRowsToCanonicalLinks(sourcePreview.rows, sourcePreview.mapping, {
+      valuePolicy,
+      minValue: valueMinWhenClamped,
+    });
+  }, [sourcePreview, sourceMappingIssues, valuePolicy, valueMinWhenClamped]);
+
+  const canApplyMapping =
+    mappingTransformPreview != null && mappingTransformPreview.stats.outputRows > 0;
+
+
+  const sourceFlowSteps = useMemo(() => {
+    const ingested = !!sourcePreview;
+    const mapped = ingested && sourceMappingIssues.length === 0;
+    const reviewed = mapped && mappingTransformPreview != null;
+    const applied = importFlowAppliedCount > 0;
+
+    const steps = [
+      {
+        id: 1,
+        title: "1. Ingest",
+        done: ingested,
+        hint: ingested ? `${sourcePreviewMode.toUpperCase()} data loaded` : "Upload or paste source",
+      },
+      {
+        id: 2,
+        title: "2. Map",
+        done: mapped,
+        hint: mapped ? "Mapping columns valid" : "Choose source/target/value",
+      },
+      {
+        id: 3,
+        title: "3. Review",
+        done: reviewed,
+        hint: reviewed ? "Preview and policy checked" : "Check health and table preview",
+      },
+      {
+        id: 4,
+        title: "4. Apply",
+        done: applied,
+        hint: applied ? "Applied to editor" : "Apply mapping to editor",
+      },
+    ];
+
+    const firstPending = steps.find((step) => !step.done)?.id ?? 4;
+    return steps.map((step) => ({ ...step, active: step.id === firstPending }));
+  }, [
+    sourcePreview,
+    sourceMappingIssues.length,
+    mappingTransformPreview,
+    importFlowAppliedCount,
+    sourcePreviewMode,
+  ]);
+  const presetCompatibilityById = useMemo(() => {
+    const status = new Map<string, { ok: boolean; reason: string }>();
+    if (!sourcePreview) return status;
+    const headers = new Set(sourcePreview.headers);
+
+    mappingPresetsForMode.forEach((preset) => {
+      const missing = [preset.mapping.source, preset.mapping.target, preset.mapping.value].filter(
+        (column) => !headers.has(column),
+      );
+      if (missing.length > 0) {
+        status.set(preset.id, { ok: false, reason: 'Missing columns: ' + missing.join(', ') });
+        return;
+      }
+      status.set(preset.id, { ok: true, reason: '' });
+    });
+
+    return status;
+  }, [mappingPresetsForMode, sourcePreview]);
 
   const graphMetrics = useMemo(
     () => ({ nodes: graph.nodes.length, links: graph.links.length }),
@@ -781,6 +965,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
+      setImportFlowAppliedCount(0);
       setPastedJson(text);
       setActiveTab("source");
       return;
@@ -795,6 +980,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
+      setImportFlowAppliedCount(0);
       return;
     }
 
@@ -806,6 +992,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSourceSortDir("asc");
     setSourceFilter("");
     setSourcePage(1);
+    setImportFlowAppliedCount(0);
   };
 
   const onFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -832,19 +1019,21 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   const applyMappingToEditor = () => {
     if (!sourcePreview) return;
-    const transformed = transformRowsToCanonicalLinks(sourcePreview.rows, sourcePreview.mapping, {
-      valuePolicy,
-      minValue: valueMinWhenClamped,
-    });
+    if (sourceMappingIssues.length > 0) {
+      setSourceError(sourceMappingIssues[0]);
+      return;
+    }
+    if (!mappingTransformPreview || mappingTransformPreview.stats.outputRows === 0) {
+      setSourceError("No valid rows left after applying import policy.");
+      return;
+    }
+
+    const transformed = mappingTransformPreview;
     const text =
       sourcePreviewMode === "json"
         ? linksToCanonicalJson(transformed.links)
         : linksToCanonicalCsv(transformed.links);
 
-    if (transformed.stats.outputRows === 0) {
-      setSourceError("No valid rows left after applying import policy.");
-      return;
-    }
     setSourceError("");
     setSourceNotice(
       `Imported ${transformed.stats.outputRows}/${transformed.stats.totalRows} rows` +
@@ -857,11 +1046,27 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     );
     setFormat(sourcePreviewMode === "json" ? "json" : "csv");
     setEditorText(text);
+    setImportFlowAppliedCount((value) => value + 1);
     setActiveTab("editor");
+  };
+
+  const updateSourceMapping = (key: keyof TableMapping, value: string) => {
+    if (!sourcePreview) return;
+    setSourcePreview({
+      ...sourcePreview,
+      mapping: { ...sourcePreview.mapping, [key]: value },
+    });
+    setSourceError("");
+    setSourceNotice("");
+    setImportFlowAppliedCount(0);
   };
 
   const saveMappingPreset = () => {
     if (!sourcePreview) return;
+    if (sourceMappingIssues.length > 0) {
+      setSourceError(sourceMappingIssues[0]);
+      return;
+    }
     const suggested = `${sourcePreviewMode.toUpperCase()} Mapping`;
     const name = window.prompt("Preset name", suggested)?.trim();
     if (!name) return;
@@ -906,6 +1111,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSourceError("");
     setSourceNotice(`Applied mapping preset: ${preset.name}`);
     setSourcePreview({ ...sourcePreview, mapping: preset.mapping });
+    setImportFlowAppliedCount(0);
   };
 
   const removeMappingPreset = (presetId: string) => {
@@ -928,6 +1134,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
+      setImportFlowAppliedCount(0);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Failed to parse pasted CSV");
     }
@@ -949,6 +1156,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
+      setImportFlowAppliedCount(0);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Failed to parse pasted JSON");
     }
@@ -1063,6 +1271,16 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       window.prompt("Template description", "Custom template from current document")?.trim() ||
       "Custom template from current document";
     const category = window.prompt("Template category", "Custom")?.trim() || "Custom";
+    const tagsInput =
+      window.prompt("Template tags (comma separated)", "custom")?.trim() || "";
+    const tags = Array.from(
+      new Set(
+        tagsInput
+          .split(",")
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
 
     const existingTemplates = await loadUserTemplates();
     const existing = existingTemplates.find(
@@ -1083,6 +1301,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       category,
       difficulty: "Medium",
       description,
+      tags: tags.length > 0 ? tags : undefined,
       accent: USER_TEMPLATE_ACCENTS[Math.floor(Math.random() * USER_TEMPLATE_ACCENTS.length)],
       document: {
         title: currentDoc.title || "Untitled Diagram",
@@ -1095,6 +1314,73 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       },
     };
     await upsertUserTemplate(template);
+    await saveRecentTemplate(template.id);
+    const [templateIds, templates] = await Promise.all([
+      loadRecentTemplateIds(),
+      loadUserTemplates(),
+    ]);
+    setRecentTemplateIds(templateIds);
+    setUserTemplates(templates);
+    setLibraryTab("templates");
+    setShowDocuments(true);
+  };
+
+  const applyTemplateFromLibrary = async (nextTemplateId: string) => {
+    setShowDocuments(false);
+    await saveRecentTemplate(nextTemplateId);
+    setRecentTemplateIds(await loadRecentTemplateIds());
+    router.replace(`/editor?template=${encodeURIComponent(nextTemplateId)}`);
+  };
+
+  const deleteTemplateFromLibrary = async (templateId: string) => {
+    const confirmed = window.confirm("Delete this template?");
+    if (!confirmed) return;
+    await deleteUserTemplate(templateId);
+    const [templateIds, templates] = await Promise.all([
+      loadRecentTemplateIds(),
+      loadUserTemplates(),
+    ]);
+    setRecentTemplateIds(templateIds);
+    setUserTemplates(templates);
+    setSelectedUserTemplateIds((previous) => previous.filter((id) => id !== templateId));
+  };
+
+  const toggleSelectAllVisibleUsers = () => {
+    if (allVisibleUsersSelected) {
+      setSelectedUserTemplateIds((previous) =>
+        previous.filter((id) => !selectableUserTemplateIds.includes(id)),
+      );
+      return;
+    }
+    setSelectedUserTemplateIds((previous) => {
+      const next = new Set(previous);
+      selectableUserTemplateIds.forEach((id) => next.add(id));
+      return [...next];
+    });
+  };
+
+  const removeSelectedUserTemplates = async () => {
+    if (effectiveSelectedUserTemplateIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${effectiveSelectedUserTemplateIds.length} selected template(s)?`,
+    );
+    if (!confirmed) return;
+    await deleteUserTemplates(effectiveSelectedUserTemplateIds);
+    const [templateIds, templates] = await Promise.all([
+      loadRecentTemplateIds(),
+      loadUserTemplates(),
+    ]);
+    setRecentTemplateIds(templateIds);
+    setUserTemplates(templates);
+    setSelectedUserTemplateIds([]);
+  };
+
+  const clearRecentTemplatesFromLibrary = async () => {
+    if (recentTemplateIds.length === 0) return;
+    const confirmed = window.confirm("Clear recent template history?");
+    if (!confirmed) return;
+    await clearRecentTemplateIds();
+    setRecentTemplateIds([]);
   };
 
   const deleteCurrentDocument = async () => {
@@ -1242,37 +1528,171 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       </header>
 
       {showDocuments && (
-        <div className="absolute left-4 top-16 z-40 w-80 rounded-xl border bg-white p-3 shadow-xl">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</p>
-            <button
-              onClick={deleteCurrentDocument}
-              className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
-            >
-              Delete Current
-            </button>
-          </div>
-          <div className="max-h-64 space-y-1 overflow-auto pr-1">
-            {allDocuments.map((doc) => (
+        <div className="absolute left-4 top-16 z-40 w-96 rounded-xl border bg-white p-3 shadow-xl">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-[11px]">
               <button
-                key={doc.id}
-                onClick={() => openDocumentById(doc.id)}
-                className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${
-                  doc.id === currentDoc.id
-                    ? "border-blue-300 bg-blue-50 text-blue-700"
-                    : "hover:border-slate-300 hover:bg-slate-50"
+                onClick={() => setLibraryTab("documents")}
+                className={`rounded-md px-2 py-1 font-medium ${
+                  libraryTab === "documents" ? "bg-white text-slate-900 shadow" : "text-slate-500"
                 }`}
               >
-                <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
-                <p className="mt-0.5 text-[10px] text-slate-500">
-                  {doc.format.toUpperCase()} 璺?{new Date(doc.updatedAt).toLocaleString()}
-                </p>
+                Documents
               </button>
-            ))}
+              <button
+                onClick={() => setLibraryTab("templates")}
+                className={`rounded-md px-2 py-1 font-medium ${
+                  libraryTab === "templates" ? "bg-white text-slate-900 shadow" : "text-slate-500"
+                }`}
+              >
+                Templates
+              </button>
+            </div>
+            {libraryTab === "documents" ? (
+              <button
+                onClick={deleteCurrentDocument}
+                className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50"
+              >
+                Delete Current
+              </button>
+            ) : (
+              <button
+                onClick={saveAsTemplate}
+                className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
+              >
+                Save Current as Template
+              </button>
+            )}
+          </div>
+          <input
+            value={librarySearch}
+            onChange={(event) => setLibrarySearch(event.target.value)}
+            placeholder={libraryTab === "documents" ? "Search documents" : "Search templates"}
+            className="mb-2 w-full rounded-md border px-2 py-1.5 text-xs outline-none focus:border-blue-300"
+          />
+          {libraryTab === "templates" && (
+            <div className="mb-2 space-y-2 rounded-md border bg-slate-50 p-2">
+              <div className="flex items-center gap-2">
+                <select
+                  value={libraryTemplateSourceMode}
+                  onChange={(event) =>
+                    setLibraryTemplateSourceMode(event.target.value as "all" | "user" | "builtin")
+                  }
+                  className="h-7 min-w-[120px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                >
+                  <option value="all">All sources</option>
+                  <option value="user">My templates</option>
+                  <option value="builtin">Built-in</option>
+                </select>
+                <button
+                  onClick={() => void clearRecentTemplatesFromLibrary()}
+                  disabled={recentTemplateIds.length === 0}
+                  className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear recent
+                </button>
+                <button
+                  onClick={() => void removeSelectedUserTemplates()}
+                  disabled={effectiveSelectedUserTemplateIds.length === 0}
+                  className="rounded border px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Delete selected ({effectiveSelectedUserTemplateIds.length})
+                </button>
+              </div>
+              {libraryTemplateSourceMode === "user" && selectableUserTemplateIds.length > 0 && (
+                <button
+                  onClick={toggleSelectAllVisibleUsers}
+                  className="rounded border px-2 py-1 text-[11px] text-slate-700 hover:bg-white"
+                >
+                  {allVisibleUsersSelected ? "Unselect all" : "Select all"}
+                </button>
+              )}
+            </div>
+          )}
+          <div className="max-h-72 space-y-1 overflow-auto pr-1">
+            {libraryTab === "documents" ? (
+              filteredDocuments.length === 0 ? (
+                <p className="rounded-lg border border-dashed px-2 py-3 text-center text-xs text-slate-500">
+                  No documents found.
+                </p>
+              ) : (
+                filteredDocuments.map((doc) => (
+                  <button
+                    key={doc.id}
+                    onClick={() => openDocumentById(doc.id)}
+                    className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${
+                      doc.id === currentDoc.id
+                        ? "border-blue-300 bg-blue-50 text-blue-700"
+                        : "hover:border-slate-300 hover:bg-slate-50"
+                    }`}
+                  >
+                    <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
+                    <p className="mt-0.5 text-[10px] text-slate-500">
+                      {doc.format.toUpperCase()} 路 {new Date(doc.updatedAt).toLocaleString()}
+                    </p>
+                  </button>
+                ))
+              )
+            ) : sortedFilteredTemplates.length === 0 ? (
+              <p className="rounded-lg border border-dashed px-2 py-3 text-center text-xs text-slate-500">
+                No templates found.
+              </p>
+            ) : (
+              sortedFilteredTemplates.map((template) => {
+                const isUserTemplate = template.id.startsWith("user-");
+                const isRecentTemplate = recentTemplateIdSet.has(template.id);
+                return (
+                  <div key={template.id} className="rounded-lg border px-2 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <button
+                        onClick={() => void applyTemplateFromLibrary(template.id)}
+                        className="flex-1 text-left"
+                      >
+                        <p className="text-xs font-medium text-slate-800">{template.name}</p>
+                        {isRecentTemplate && (
+                          <span className="mt-1 inline-block rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                            Recent
+                          </span>
+                        )}
+                        <p className="mt-0.5 text-[10px] text-slate-500">
+                          {template.category} | {isUserTemplate ? "My Template" : "Built-in"}
+                        </p>
+                      </button>
+                      {isUserTemplate && (
+                        <div className="flex items-center gap-1">
+                          <label className="inline-flex items-center gap-1 rounded border px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-50">
+                            <input
+                              type="checkbox"
+                              checked={effectiveSelectedUserTemplateIds.includes(template.id)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setSelectedUserTemplateIds((previous) => {
+                                  if (checked) {
+                                    if (previous.includes(template.id)) return previous;
+                                    return [...previous, template.id];
+                                  }
+                                  return previous.filter((id) => id !== template.id);
+                                });
+                              }}
+                            />
+                            Select
+                          </label>
+                          <button
+                            onClick={() => void deleteTemplateFromLibrary(template.id)}
+                            className="rounded border px-2 py-1 text-[10px] text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}
-
       <div className="flex min-h-0 flex-1">
         <aside className={leftPanelClass}>
           <div className="p-2">
@@ -1294,6 +1714,28 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
           {activeTab === "source" ? (
             <div className="space-y-3 overflow-auto p-4">
+              <div className="rounded-lg border bg-white p-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Import Flow
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {sourceFlowSteps.map((step) => (
+                    <div
+                      key={step.id}
+                      className={`rounded border px-2 py-2 text-xs ${
+                        step.done
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : step.active
+                            ? "border-blue-200 bg-blue-50 text-blue-700"
+                            : "border-slate-200 bg-white text-slate-500"
+                      }`}
+                    >
+                      <p className="font-medium">{step.title}</p>
+                      <p className="mt-0.5 text-[11px]">{step.hint}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <label
                 className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-8 text-center transition ${isDragOver ? "border-blue-500 bg-blue-50/50" : "bg-slate-50 hover:border-blue-400 hover:bg-blue-50/40"}`}
                 onDragOver={(event) => {
@@ -1412,7 +1854,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     <p className="text-xs font-medium text-slate-600">Import Value Policy</p>
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <button
-                        onClick={() => setValuePolicy("drop")}
+                        onClick={() => {
+                          setValuePolicy("drop");
+                          setSourceError("");
+                          setSourceNotice("");
+                          setImportFlowAppliedCount(0);
+                        }}
                         className={`rounded border px-2 py-1 text-xs ${
                           valuePolicy === "drop"
                             ? "border-slate-900 bg-slate-900 text-white"
@@ -1422,7 +1869,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                         Drop invalid/non-positive
                       </button>
                       <button
-                        onClick={() => setValuePolicy("clamp")}
+                        onClick={() => {
+                          setValuePolicy("clamp");
+                          setSourceError("");
+                          setSourceNotice("");
+                          setImportFlowAppliedCount(0);
+                        }}
                         className={`rounded border px-2 py-1 text-xs ${
                           valuePolicy === "clamp"
                             ? "border-slate-900 bg-slate-900 text-white"
@@ -1440,11 +1892,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           min={0.0001}
                           step={0.1}
                           value={valueMinWhenClamped}
-                          onChange={(event) =>
+                          onChange={(event) => {
                             setValueMinWhenClamped(
                               Math.max(0.0001, Number(event.target.value) || 1),
-                            )
-                          }
+                            );
+                            setSourceError("");
+                            setSourceNotice("");
+                            setImportFlowAppliedCount(0);
+                          }}
                           className="mt-1 w-full rounded border px-2 py-1 text-xs"
                         />
                       </label>
@@ -1456,7 +1911,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       <p className="text-xs font-medium text-slate-600">Mapping Presets</p>
                       <button
                         onClick={saveMappingPreset}
-                        className="rounded border px-2 py-1 text-[11px] text-slate-600"
+                        disabled={sourceMappingIssues.length > 0}
+                        title={sourceMappingIssues.length > 0 ? sourceMappingIssues[0] : ""}
+                        className="rounded border px-2 py-1 text-[11px] text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Save Current Mapping
                       </button>
@@ -1471,7 +1928,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           <div key={preset.id} className="flex items-center gap-1">
                             <button
                               onClick={() => applyMappingPreset(preset.id)}
-                              className="flex-1 rounded border px-2 py-1 text-left text-[11px] text-slate-700"
+                              disabled={!presetCompatibilityById.get(preset.id)?.ok}
+                              title={presetCompatibilityById.get(preset.id)?.reason || ""}
+                              className="flex-1 rounded border px-2 py-1 text-left text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               {preset.name}
                             </button>
@@ -1493,12 +1952,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       <select
                         className="mt-1 w-full rounded border px-2 py-1 text-xs"
                         value={sourcePreview.mapping.source}
-                        onChange={(event) =>
-                          setSourcePreview({
-                            ...sourcePreview,
-                            mapping: { ...sourcePreview.mapping, source: event.target.value },
-                          })
-                        }
+                        onChange={(event) => updateSourceMapping("source", event.target.value)}
                       >
                         {sourcePreview.headers.map((header) => (
                           <option key={`source-${header}`} value={header}>
@@ -1512,12 +1966,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       <select
                         className="mt-1 w-full rounded border px-2 py-1 text-xs"
                         value={sourcePreview.mapping.target}
-                        onChange={(event) =>
-                          setSourcePreview({
-                            ...sourcePreview,
-                            mapping: { ...sourcePreview.mapping, target: event.target.value },
-                          })
-                        }
+                        onChange={(event) => updateSourceMapping("target", event.target.value)}
                       >
                         {sourcePreview.headers.map((header) => (
                           <option key={`target-${header}`} value={header}>
@@ -1531,12 +1980,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       <select
                         className="mt-1 w-full rounded border px-2 py-1 text-xs"
                         value={sourcePreview.mapping.value}
-                        onChange={(event) =>
-                          setSourcePreview({
-                            ...sourcePreview,
-                            mapping: { ...sourcePreview.mapping, value: event.target.value },
-                          })
-                        }
+                        onChange={(event) => updateSourceMapping("value", event.target.value)}
                       >
                         {sourcePreview.headers.map((header) => (
                           <option key={`value-${header}`} value={header}>
@@ -1545,6 +1989,31 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                         ))}
                       </select>
                     </label>
+                  </div>
+
+                  <div className="rounded-lg border bg-white p-3">
+                    <div className="mb-2 text-xs font-medium text-slate-600">Mapping Health</div>
+                    {sourceMappingIssues.length > 0 ? (
+                      <div className="space-y-1 text-[11px] text-red-600">
+                        {sourceMappingIssues.map((issue) => (
+                          <p key={issue}>- {issue}</p>
+                        ))}
+                      </div>
+                    ) : mappingTransformPreview ? (
+                      <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-600">
+                        <div className="rounded border bg-slate-50 px-2 py-1">
+                          Output: {mappingTransformPreview.stats.outputRows}
+                        </div>
+                        <div className="rounded border bg-slate-50 px-2 py-1">
+                          Dropped: {mappingTransformPreview.stats.droppedRows}
+                        </div>
+                        <div className="rounded border bg-slate-50 px-2 py-1">
+                          Clamped: {mappingTransformPreview.stats.clampedRows}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500">Mapping preview unavailable.</p>
+                    )}
                   </div>
 
                   <div className="rounded-lg border bg-white p-3">
@@ -1604,7 +2073,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                                   className="inline-flex items-center gap-1 hover:text-slate-800"
                                 >
                                   {header}
-                                  {sourceSortKey === header ? (sourceSortDir === "asc" ? "▲" : "▼") : ""}
+                                  {sourceSortKey === header ? (sourceSortDir === "asc" ? "^" : "v") : ""}
                                 </button>
                               </th>
                             ))}
@@ -1627,10 +2096,16 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
                   <button
                     onClick={applyMappingToEditor}
-                    className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+                    disabled={!canApplyMapping}
+                    className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Apply Mapping to Editor ({sourcePreviewMode.toUpperCase()})
                   </button>
+                  {!canApplyMapping && (
+                    <p className="text-[11px] text-red-600">
+                      {sourceMappingIssues[0] || "No valid rows to import with current mapping/policy."}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -1669,7 +2144,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           <div className="mb-2 flex items-center justify-between rounded-lg border bg-white/85 px-2 py-1 text-xs">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setInteractionMode("select")}
+                onClick={() => {
+                  setInteractionMode("select");
+                  setCanvasResetKey((value) => value + 1);
+                }}
                 className={`inline-flex items-center gap-1 rounded px-2 py-1 ${
                   interactionMode === "select" ? "bg-slate-900 text-white" : "text-slate-600"
                 }`}
@@ -1678,7 +2156,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 Select
               </button>
               <button
-                onClick={() => setInteractionMode("pan")}
+                onClick={() => {
+                  setInteractionMode("pan");
+                  setCanvasResetKey((value) => value + 1);
+                }}
                 className={`inline-flex items-center gap-1 rounded px-2 py-1 ${
                   interactionMode === "pan" ? "bg-slate-900 text-white" : "text-slate-600"
                 }`}
@@ -1691,7 +2172,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <button
                 onClick={() => {
                   setCanvasResetKey((value) => value + 1);
-                  setInteractionMode("select");
                 }}
                 className="inline-flex items-center gap-1 rounded border px-2 py-1 text-slate-600"
               >
@@ -1702,6 +2182,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 onClick={() => {
                   setCanvasResetKey((value) => value + 1);
                   setInteractionMode("select");
+                  clearSelection();
+                  setTraceMode("none");
                 }}
                 className="inline-flex items-center gap-1 rounded border px-2 py-1 text-slate-600"
               >
@@ -1741,6 +2223,60 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         </main>
 
         <aside className={rightPanelClass}>
+          <div className={`grid grid-cols-4 gap-1 rounded-lg border p-1 text-[11px] ${
+            isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"
+          }`}>
+            <button
+              onClick={() => setRightPanelTab("inspect")}
+              className={`rounded px-2 py-1 font-medium ${
+                rightPanelTab === "inspect"
+                  ? "bg-slate-900 text-white"
+                  : isDarkTheme
+                    ? "text-slate-300 hover:bg-slate-700"
+                    : "text-slate-600 hover:bg-white"
+              }`}
+            >
+              Inspect
+            </button>
+            <button
+              onClick={() => setRightPanelTab("style")}
+              className={`rounded px-2 py-1 font-medium ${
+                rightPanelTab === "style"
+                  ? "bg-slate-900 text-white"
+                  : isDarkTheme
+                    ? "text-slate-300 hover:bg-slate-700"
+                    : "text-slate-600 hover:bg-white"
+              }`}
+            >
+              Style
+            </button>
+            <button
+              onClick={() => setRightPanelTab("export")}
+              className={`rounded px-2 py-1 font-medium ${
+                rightPanelTab === "export"
+                  ? "bg-slate-900 text-white"
+                  : isDarkTheme
+                    ? "text-slate-300 hover:bg-slate-700"
+                    : "text-slate-600 hover:bg-white"
+              }`}
+            >
+              Export
+            </button>
+            <button
+              onClick={() => setRightPanelTab("studio")}
+              className={`rounded px-2 py-1 font-medium ${
+                rightPanelTab === "studio"
+                  ? "bg-slate-900 text-white"
+                  : isDarkTheme
+                    ? "text-slate-300 hover:bg-slate-700"
+                    : "text-slate-600 hover:bg-white"
+              }`}
+            >
+              Studio
+            </button>
+          </div>
+          {rightPanelTab === "studio" && (
+            <>
           <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Studio Settings</p>
             <label className="mt-2 block text-xs text-slate-600">
@@ -1842,7 +2378,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </p>
             <p className="mt-1 text-[11px] text-slate-500">Effective: {effectivePerformanceMode}</p>
           </div>
+            </>
+          )}
 
+          {rightPanelTab === "inspect" && (
+            <>
           <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Inspector</p>
             {selectedLink ? (
@@ -1984,21 +2524,23 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               </button>
               <button
                 onClick={() => setTraceMode("upstream")}
+                disabled={selectedNodeIds.length === 0}
                 className={`rounded border px-2 py-1 text-[11px] ${
                   traceMode === "upstream"
                     ? "border-slate-900 bg-slate-900 text-white"
                     : "bg-white text-slate-600"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 Upstream
               </button>
               <button
                 onClick={() => setTraceMode("downstream")}
+                disabled={selectedNodeIds.length === 0}
                 className={`rounded border px-2 py-1 text-[11px] ${
                   traceMode === "downstream"
                     ? "border-slate-900 bg-slate-900 text-white"
                     : "bg-white text-slate-600"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 Downstream
               </button>
@@ -2051,7 +2593,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               Shift+click for multi-select, drag on blank canvas for box-select.
             </p>
           </div>
+            </>
+          )}
 
+          {rightPanelTab === "style" && (
+            <>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Appearance</p>
             <label className="mt-2 block text-xs text-slate-600">
@@ -2218,6 +2764,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </select>
           </label>
 
+            </>
+          )}
+          {rightPanelTab === "export" && (
           <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"}`}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Export Settings</p>
             {exportPreviewUrl && (
@@ -2395,9 +2944,18 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               Transparent background (PNG/HTML/SVG)
             </label>
           </div>
+          )}
         </aside>
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
 

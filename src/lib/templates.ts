@@ -1,4 +1,4 @@
-import { SankeyStyle, TemplateSummary } from "@/lib/types";
+﻿import { SankeyStyle, TemplateSummary } from "@/lib/types";
 
 const defaultStyle: SankeyStyle = {
   nodeWidth: 20,
@@ -51,6 +51,7 @@ export const templateList: TemplateSummary[] = [
     category: "Engineering",
     difficulty: "Medium",
     description: "Track energy flows and losses across generation and usage.",
+    tags: ["energy", "operations", "flow"],
     accent: "from-blue-500 to-emerald-500",
     document: {
       title: "Q3 Energy Distribution",
@@ -68,6 +69,7 @@ export const templateList: TemplateSummary[] = [
     category: "Business",
     difficulty: "Medium",
     description: "Visualize raw material to warehouse to retail flow.",
+    tags: ["supply-chain", "logistics", "ops"],
     accent: "from-cyan-500 to-teal-500",
     document: {
       title: "Supply Chain Overview",
@@ -85,6 +87,7 @@ export const templateList: TemplateSummary[] = [
     category: "Marketing",
     difficulty: "Advanced",
     description: "Analyze customer journey from traffic to conversion.",
+    tags: ["marketing", "funnel", "conversion"],
     accent: "from-pink-500 to-orange-500",
     document: {
       title: "Campaign Funnel",
@@ -114,3 +117,5 @@ export function templateById(templateId?: string | null) {
   }
   return templateList.find((template) => template.id === templateId);
 }
+
+

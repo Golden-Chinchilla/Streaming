@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Sankey Editor Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#0d59f2",
+                        "background-light": "#f8fafc","background-dark": "#101622",
+                        "surface-dark": "#1a2233",
+                        "surface-light": "#ffffff",
+                        "sidebar-light": "#f1f5f9",},
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"],
+                        "mono": ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
+                    },
+                    borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+                    keyframes: {
+                        'spin-slow': {
+                            '0%': { transform: 'rotate(0deg)' },
+                            '100%': { transform: 'rotate(360deg)' },
+                        }
+                    },
+                    animation: {
+                        'spin-slow': 'spin-slow 3s linear infinite',
+                    }
+                },
+            },
+        }
+    </script>
+<style>::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        .dark ::-webkit-scrollbar-track {
+            background: #101622;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #2d3648;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        .dark ::-webkit-scrollbar-thumb:hover {
+            background: #4a5568;
+        }.token.key { color: #d946ef; }
+        .token.string { color: #10b981; }
+        .token.number { color: #3b82f6; }
+        .token.punctuation { color: #94a3b8; }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display h-screen flex flex-col overflow-hidden">
+<header class="h-16 bg-white dark:bg-surface-dark border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 z-20 shrink-0 shadow-sm">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 text-primary font-bold text-xl">
+<span class="material-icons">schema</span>
+<span>FlowViz</span>
+</div>
+<div class="h-6 w-px bg-slate-300 dark:bg-slate-700"></div>
+<div class="flex flex-col">
+<input class="bg-transparent border-none text-sm font-semibold p-0 focus:ring-0 w-48 text-slate-800 dark:text-white placeholder-slate-400" type="text" value="Q3 Energy Distribution"/>
+<span class="text-xs text-slate-500 dark:text-slate-400">Saved just now</span>
+</div>
+</div>
+<div class="flex items-center gap-2 bg-slate-50 dark:bg-background-dark p-1 rounded-lg border border-slate-200 dark:border-slate-700">
+<button class="p-2 hover:bg-white dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors shadow-sm" title="Undo">
+<span class="material-icons text-lg">undo</span>
+</button>
+<button class="p-2 hover:bg-white dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors shadow-sm" title="Redo">
+<span class="material-icons text-lg">redo</span>
+</button>
+<div class="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-1"></div>
+<button class="flex items-center gap-1 px-3 py-1.5 hover:bg-white dark:hover:bg-slate-700 rounded text-xs font-medium text-slate-700 dark:text-slate-300 transition-colors shadow-sm">
+<span class="material-icons text-base">auto_fix_high</span>
+            Auto-layout
+        </button>
+<div class="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-1"></div>
+<button class="p-2 hover:bg-white dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors shadow-sm" title="Zoom Out">
+<span class="material-icons text-lg">remove</span>
+</button>
+<span class="text-xs font-mono w-12 text-center text-slate-600 dark:text-slate-400">100%</span>
+<button class="p-2 hover:bg-white dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors shadow-sm" title="Zoom In">
+<span class="material-icons text-lg">add</span>
+</button>
+</div>
+<div class="flex items-center gap-3">
+<button class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
+<span class="material-icons text-lg">share</span>
+            Share
+        </button>
+<button class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary hover:bg-blue-600 text-white rounded-lg shadow-lg shadow-blue-500/20 transition-all">
+<span class="material-icons text-lg">download</span>
+            Export
+        </button>
+<div class="ml-2 w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 overflow-hidden border-2 border-white dark:border-slate-700 relative">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="User avatar placeholder" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCrUlREV_AyaGWfT27pZtu2HLfF4AtQiUbJ4EgZYKWPEA7anp3RyvBSBae-sxfukmp42-mOKzUeGakTSyxCTbU0KqfEDjBuLDFucAMwxtxOPtpKPyqDOAc47dp6YzeroBGAd9_bwNwtR-lZ-C0mH-7BX4sWdmDcpFVE_H5VxtUiDP1TQOQDfftVDYl56e2kzUGQQrQf7isZE3P6UCDJZ-T48NKxwR9MZz1qbYErd0Jlk-1pX2cYOYYqpZyyvW0PWIAThGbFnX4Cn0U"/>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<aside class="w-96 bg-sidebar-light dark:bg-surface-dark border-r border-slate-200 dark:border-slate-800 flex flex-col z-10 shadow-[4px_0_24px_-12px_rgba(0,0,0,0.1)]">
+<div class="flex items-center p-2 border-b border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-surface-dark/50 backdrop-blur-sm">
+<div class="flex w-full bg-slate-200/50 dark:bg-slate-800/50 p-1 rounded-lg">
+<button class="flex-1 py-1.5 px-3 rounded text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">Source</button>
+<button class="flex-1 py-1.5 px-3 rounded bg-white dark:bg-slate-700 shadow-sm text-sm font-medium text-primary dark:text-blue-400">Editor</button>
+</div>
+</div>
+<div class="flex-1 flex flex-col overflow-hidden bg-[#fafafa] dark:bg-[#0d1117] relative group">
+<div class="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-xs bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-1 rounded hover:bg-slate-300 dark:hover:bg-slate-600">Copy</button>
+</div>
+<div class="flex-1 overflow-auto font-mono text-sm leading-6 flex">
+<div class="w-10 flex-shrink-0 bg-slate-100 dark:bg-slate-800/50 text-slate-400 dark:text-slate-600 text-right pr-3 pt-4 select-none border-r border-slate-200/50 dark:border-slate-700/50">
+<div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div><div>9</div><div>10</div><div>11</div><div>12</div><div>13</div><div>14</div><div>15</div><div>16</div>
+</div>
+<div class="flex-1 p-4 pt-4 whitespace-pre outline-none text-slate-800 dark:text-slate-300" contenteditable="true" spellcheck="false">
+<span class="token punctuation">[</span>
+<span class="token punctuation">{</span>
+<span class="token key">"source"</span><span class="token punctuation">:</span> <span class="token string">"Total Energy"</span><span class="token punctuation">,</span>
+<span class="token key">"target"</span><span class="token punctuation">:</span> <span class="token string">"Renewable"</span><span class="token punctuation">,</span>
+<span class="token key">"value"</span><span class="token punctuation">:</span> <span class="token number">450</span>
+<span class="token punctuation">},</span>
+<span class="token punctuation">{</span>
+<span class="token key">"source"</span><span class="token punctuation">:</span> <span class="token string">"Total Energy"</span><span class="token punctuation">,</span>
+<span class="token key">"target"</span><span class="token punctuation">:</span> <span class="token string">"Fossil Fuel"</span><span class="token punctuation">,</span>
+<span class="token key">"value"</span><span class="token punctuation">:</span> <span class="token number">620</span>
+<span class="token punctuation">},</span>
+<span class="token punctuation">{</span>
+<span class="token key">"source"</span><span class="token punctuation">:</span> <span class="token string">"Renewable"</span><span class="token punctuation">,</span>
+<span class="token key">"target"</span><span class="token punctuation">:</span> <span class="token string">"Solar"</span><span class="token punctuation">,</span>
+<span class="token key">"value"</span><span class="token punctuation">:</span> <span class="token number">210</span>
+<span class="token punctuation">},</span>
+<span class="token punctuation">{</span>
+<span class="token key">"source"</span><span class="token punctuation">:</span> <span class="token string">"Renewable"</span><span class="token punctuation">,</span>
+<span class="token key">"target"</span><span class="token punctuation">:</span> <span class="token string">"Wind"</span><span class="token punctuation">,</span>
+<span class="token key">"value"</span><span class="token punctuation">:</span> <span class="token number">180</span>
+<span class="token punctuation">},</span>
+<span class="token punctuation">{</span>
+<span class="token key">"source"</span><span class="token punctuation">:</span> <span class="token string">"Renewable"</span><span class="token punctuation">,</span>
+<span class="token key">"target"</span><span class="token punctuation">:</span> <span class="token string">"Hydro"</span><span class="token punctuation">,</span>
+<span class="token key">"value"</span><span class="token punctuation">:</span> <span class="token number">60</span>
+<span class="token punctuation">}</span>
+<span class="token punctuation">]</span></div>
+</div>
+<div class="h-8 bg-slate-200 dark:bg-slate-800 flex items-center justify-between px-3 text-xs text-slate-500 dark:text-slate-400">
+<div class="flex gap-4">
+<span>JSON</span>
+<span>UTF-8</span>
+</div>
+<div>Ln 14, Col 22</div>
+</div>
+</div>
+<div class="p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-surface-dark">
+<button class="w-full py-2.5 bg-slate-900 dark:bg-primary hover:bg-slate-800 dark:hover:bg-blue-600 text-white rounded-lg shadow-lg shadow-slate-900/10 dark:shadow-blue-500/20 transition-all flex items-center justify-center gap-2 font-medium text-sm group">
+<span class="material-icons text-lg group-hover:animate-spin-slow">sync</span>
+<span>Sync Data to Diagram</span>
+</button>
+<div class="mt-2 text-center">
+<span class="text-[10px] text-slate-400 dark:text-slate-500">Last synced: 14:02:35</span>
+</div>
+</div>
+</aside>
+<main class="flex-1 relative bg-background-light dark:bg-background-dark overflow-hidden flex items-center justify-center p-8">
+<div class="absolute inset-0 opacity-[0.03] dark:opacity-[0.05] pointer-events-none" style="background-image: radial-gradient(#64748b 1px, transparent 1px); background-size: 20px 20px;"></div>
+<div class="relative w-full h-full max-w-5xl max-h-[800px] bg-white dark:bg-surface-dark rounded-xl shadow-2xl shadow-slate-200/50 dark:shadow-black/20 border border-slate-200 dark:border-slate-800 p-8 flex items-center justify-center">
+<div class="absolute top-4 left-4 text-xs text-slate-400 font-mono bg-slate-50 dark:bg-slate-800/50 px-2 py-1 rounded">1280x800 • 100%</div>
+<svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 800 500">
+<defs>
+<linearGradient id="grad1" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" style="stop-color:#3b82f6;stop-opacity:0.6"></stop>
+<stop offset="100%" style="stop-color:#10b981;stop-opacity:0.6"></stop>
+</linearGradient>
+<linearGradient id="grad2" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" style="stop-color:#3b82f6;stop-opacity:0.6"></stop>
+<stop offset="100%" style="stop-color:#f59e0b;stop-opacity:0.6"></stop>
+</linearGradient>
+<linearGradient id="grad3" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" style="stop-color:#10b981;stop-opacity:0.6"></stop>
+<stop offset="100%" style="stop-color:#ec4899;stop-opacity:0.6"></stop>
+</linearGradient>
+</defs>
+<rect class="cursor-pointer hover:opacity-80 transition-opacity" fill="#3b82f6" height="200" rx="4" width="20" x="50" y="150"></rect>
+<text class="font-display" fill="#94a3b8" font-size="12" text-anchor="end" x="40" y="255">Total Energy</text>
+<path class="hover:stroke-opacity-80 cursor-pointer transition-all" d="M70,200 C200,200 200,100 350,100" fill="none" stroke="url(#grad1)" stroke-width="80"></path>
+<path class="hover:stroke-opacity-80 cursor-pointer transition-all" d="M70,300 C200,300 200,400 350,400" fill="none" stroke="url(#grad2)" stroke-width="100"></path>
+<rect class="cursor-pointer hover:opacity-80 transition-opacity ring-2 ring-primary ring-offset-2 ring-offset-white dark:ring-offset-surface-dark" fill="#10b981" height="100" rx="4" width="20" x="350" y="50"></rect>
+<text class="font-display" fill="#94a3b8" font-size="12" text-anchor="middle" x="360" y="40">Renewable</text>
+<rect class="cursor-pointer hover:opacity-80 transition-opacity" fill="#f59e0b" height="100" rx="4" width="20" x="350" y="350"></rect>
+<text class="font-display" fill="#94a3b8" font-size="12" text-anchor="middle" x="360" y="465">Fossil Fuel</text>
+<path class="cursor-pointer transition-all stroke-primary/50" d="M370,100 C500,100 500,80 650,80" fill="none" stroke="url(#grad3)" stroke-width="40" style="filter: drop-shadow(0 0 4px rgba(13, 89, 242, 0.5));"></path>
+<path class="cursor-pointer hover:stroke-opacity-40 transition-all" d="M370,80 C500,80 500,150 650,150" fill="none" stroke="#334155" stroke-opacity="0.2" stroke-width="30"></path>
+<rect class="cursor-pointer hover:opacity-80 transition-opacity" fill="#ec4899" height="40" rx="4" width="20" x="650" y="60"></rect>
+<text class="font-display" fill="#94a3b8" font-size="12" text-anchor="start" x="680" y="85">Solar</text>
+<rect class="cursor-pointer hover:opacity-80 transition-opacity" fill="#6366f1" height="40" rx="4" width="20" x="650" y="130"></rect>
+<text class="font-display" fill="#94a3b8" font-size="12" text-anchor="start" x="680" y="155">Wind</text>
+</svg>
+<div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-700 shadow-xl rounded-full px-2 py-1.5 z-20">
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition-colors" title="Fit to Screen">
+<span class="material-icons text-sm">fit_screen</span>
+</button>
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-primary bg-primary/10 hover:bg-primary/20 transition-colors" title="Selection Mode">
+<span class="material-icons text-sm">near_me</span>
+</button>
+<button class="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition-colors" title="Hand Tool">
+<span class="material-icons text-sm">pan_tool</span>
+</button>
+</div>
+</div>
+</main>
+<aside class="w-72 bg-sidebar-light dark:bg-surface-dark border-l border-slate-200 dark:border-slate-800 flex flex-col z-10 shadow-[-4px_0_24px_-12px_rgba(0,0,0,0.1)] overflow-y-auto">
+<div class="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800">
+<h2 class="font-semibold text-sm uppercase tracking-wider text-slate-500 dark:text-slate-400">Properties</h2>
+<button class="text-slate-400 hover:text-primary transition-colors">
+<span class="material-icons text-sm">settings</span>
+</button>
+</div>
+<div class="px-4 py-3 bg-white dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-2 mb-1">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="text-xs font-semibold text-primary uppercase">Selected Node</span>
+</div>
+<div class="font-medium text-slate-800 dark:text-white">Renewable</div>
+<div class="text-xs text-slate-500 mt-0.5">Value: 450 (35.2%)</div>
+</div>
+<div class="p-4 space-y-6">
+<div class="space-y-3">
+<h3 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-2">Node Style</h3>
+<div>
+<label class="block text-xs text-slate-600 dark:text-slate-300 mb-1.5">Fill Color</label>
+<div class="flex gap-2">
+<input class="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-800 dark:text-white font-mono focus:ring-1 focus:ring-primary focus:border-primary" type="text" value="#10b981"/>
+<div class="w-8 h-8 rounded bg-emerald-500 cursor-pointer border border-slate-200 dark:border-slate-700 shadow-sm"></div>
+</div>
+</div>
+<div>
+<div class="flex justify-between mb-1">
+<label class="text-xs text-slate-600 dark:text-slate-300">Node Width</label>
+<span class="text-xs text-slate-400 font-mono">20px</span>
+</div>
+<input class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" max="50" min="5" type="range" value="20"/>
+</div>
+<div>
+<div class="flex justify-between mb-1">
+<label class="text-xs text-slate-600 dark:text-slate-300">Padding</label>
+<span class="text-xs text-slate-400 font-mono">15px</span>
+</div>
+<input class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" max="50" min="0" type="range" value="15"/>
+</div>
+</div>
+<div class="h-px bg-slate-200 dark:bg-slate-800"></div>
+<div class="space-y-3">
+<h3 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-2">Link Style</h3>
+<div class="flex items-center justify-between">
+<label class="text-xs text-slate-600 dark:text-slate-300">Color Mode</label>
+<select class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs text-slate-700 dark:text-slate-300 py-1 pl-2 pr-6 focus:ring-1 focus:ring-primary focus:border-primary shadow-sm">
+<option>Gradient</option>
+<option>Source</option>
+<option>Target</option>
+<option>Static</option>
+</select>
+</div>
+<div>
+<div class="flex justify-between mb-1">
+<label class="text-xs text-slate-600 dark:text-slate-300">Opacity</label>
+<span class="text-xs text-slate-400 font-mono">60%</span>
+</div>
+<input class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" max="100" min="0" type="range" value="60"/>
+</div>
+<div>
+<div class="flex justify-between mb-1">
+<label class="text-xs text-slate-600 dark:text-slate-300">Curvature</label>
+<span class="text-xs text-slate-400 font-mono">0.5</span>
+</div>
+<input class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary" max="1" min="0" step="0.1" type="range" value="0.5"/>
+</div>
+</div>
+<div class="h-px bg-slate-200 dark:bg-slate-800"></div>
+<div class="space-y-3">
+<h3 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-2">Labels</h3>
+<div class="flex items-center gap-2">
+<button class="flex-1 py-1.5 rounded bg-primary text-white text-xs font-medium shadow-sm">Show</button>
+<button class="flex-1 py-1.5 rounded bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-colors">Hide</button>
+</div>
+<div>
+<label class="block text-xs text-slate-600 dark:text-slate-300 mb-1.5">Font Size</label>
+<div class="flex items-center gap-2">
+<button class="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors">
+<span class="material-icons text-xs">remove</span>
+</button>
+<input class="flex-1 text-center bg-transparent border-none p-0 text-xs text-slate-700 dark:text-slate-300 font-mono" type="text" value="12px"/>
+<button class="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors">
+<span class="material-icons text-xs">add</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</div>
+
+</body></html>

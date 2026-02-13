@@ -228,6 +228,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [exportPngScale, setExportPngScale] = useState(initialExportSettings.pngScale);
   const [exportTransparentBg, setExportTransparentBg] = useState(initialExportSettings.transparent);
   const [exportFileTemplate, setExportFileTemplate] = useState(initialExportSettings.fileTemplate);
+  const [exportAllFormats, setExportAllFormats] = useState<{ svg: boolean; png: boolean; html: boolean }>({
+    svg: true,
+    png: true,
+    html: true,
+  });
+  const [exportAllNamingMode, setExportAllNamingMode] = useState<"same" | "suffix">("suffix");
   const [customExportPresets, setCustomExportPresets] = useState<ExportPreset[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -668,25 +674,29 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const batchSelectionOpacityValue = selectedNodeIds.length === 1 ? singleSelectedNodeOpacity : selectionOpacity;
   const selectedLinkWidthScale = selectedLinkStyle?.widthScale ?? 1;
 
-  const exportSvg = () => {
+  const exportSvg = (customBaseName?: string) => {
     if (!exportSvgString) return;
-    downloadFile(`${resolvedExportBaseName}.svg`, "image/svg+xml;charset=utf-8", exportSvgString);
+    const baseName = customBaseName ?? resolvedExportBaseName;
+    downloadFile(`${baseName}.svg`, "image/svg+xml;charset=utf-8", exportSvgString);
   };
 
-  const exportHtml = () => {
+  const exportHtml = (customBaseName?: string) => {
     if (!svgElement) return;
     const serialized = exportSvgString;
     if (!serialized) return;
+    const baseName = customBaseName ?? resolvedExportBaseName;
     const bodyStyle = exportTransparentBg
       ? "margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;"
       : `margin:0;background:${currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff"};display:flex;justify-content:center;align-items:center;min-height:100vh;`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${currentDoc.title}</title></head><body style="${bodyStyle}">${serialized}</body></html>`;
-    downloadFile(`${resolvedExportBaseName}.html`, "text/html;charset=utf-8", html);
+    downloadFile(`${baseName}.html`, "text/html;charset=utf-8", html);
   };
 
-  const exportPng = async () => {
+  const exportPng = async (customBaseName?: string) => {
     const serialized = exportSvgString;
     if (!serialized) return;
+
+    const baseName = customBaseName ?? resolvedExportBaseName;
 
     await new Promise<void>((resolve, reject) => {
       const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
@@ -712,7 +722,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         const png = canvas.toDataURL("image/png");
         const anchor = document.createElement("a");
         anchor.href = png;
-        anchor.download = `${resolvedExportBaseName}.png`;
+        anchor.download = `${baseName}.png`;
         anchor.click();
         URL.revokeObjectURL(url);
         resolve();
@@ -727,10 +737,28 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     });
   };
 
-  const exportAll = () => {
-    exportSvg();
-    exportHtml();
-    void exportPng();
+  const exportAll = async () => {
+    const jobs: Promise<void>[] = [];
+
+    if (exportAllFormats.svg) {
+      const baseName =
+        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-svg` : resolvedExportBaseName;
+      exportSvg(baseName);
+    }
+    if (exportAllFormats.html) {
+      const baseName =
+        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-html` : resolvedExportBaseName;
+      exportHtml(baseName);
+    }
+    if (exportAllFormats.png) {
+      const baseName =
+        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-png` : resolvedExportBaseName;
+      jobs.push(exportPng(baseName));
+    }
+
+    if (jobs.length > 0) {
+      await Promise.all(jobs);
+    }
   };
 
   const applyUploadedFile = async (file: File) => {
@@ -1183,28 +1211,28 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             Auto-layout
           </button>
           <button
-            onClick={exportSvg}
+            onClick={() => exportSvg()}
             className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
           >
             <Download className="h-3.5 w-3.5" />
             SVG
           </button>
           <button
-            onClick={exportPng}
+            onClick={() => void exportPng()}
             className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
           >
             <Download className="h-3.5 w-3.5" />
             PNG
           </button>
           <button
-            onClick={exportHtml}
+            onClick={() => exportHtml()}
             className="inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600"
           >
             <Download className="h-3.5 w-3.5" />
             HTML
           </button>
           <button
-            onClick={exportAll}
+            onClick={() => void exportAll()}
             className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
           >
             <Download className="h-3.5 w-3.5" />
@@ -2312,6 +2340,52 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 Use {"{title}"} and {"{date}"}
               </span>
             </label>
+            <div className="mt-2 rounded border bg-white p-2">
+              <p className="text-[11px] font-medium text-slate-600">Export All Options</p>
+              <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] text-slate-600">
+                <label className="inline-flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={exportAllFormats.svg}
+                    onChange={(event) =>
+                      setExportAllFormats((prev) => ({ ...prev, svg: event.target.checked }))
+                    }
+                  />
+                  SVG
+                </label>
+                <label className="inline-flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={exportAllFormats.png}
+                    onChange={(event) =>
+                      setExportAllFormats((prev) => ({ ...prev, png: event.target.checked }))
+                    }
+                  />
+                  PNG
+                </label>
+                <label className="inline-flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={exportAllFormats.html}
+                    onChange={(event) =>
+                      setExportAllFormats((prev) => ({ ...prev, html: event.target.checked }))
+                    }
+                  />
+                  HTML
+                </label>
+              </div>
+              <label className="mt-2 block text-[11px] text-slate-600">
+                Naming
+                <select
+                  value={exportAllNamingMode}
+                  onChange={(event) => setExportAllNamingMode(event.target.value as "same" | "suffix")}
+                  className="mt-1 w-full rounded border px-2 py-1 text-[11px]"
+                >
+                  <option value="suffix">Append format suffix</option>
+                  <option value="same">Use same base name</option>
+                </select>
+              </label>
+            </div>
             <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
               <input
                 type="checkbox"

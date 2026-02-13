@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
@@ -89,12 +89,42 @@ type ExportPreset = {
   width: number;
   height: number;
   transparent: boolean;
+  padding?: number;
+  pngScale?: number;
+  fileTemplate?: string;
 };
 
 const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
-  { id: "1080p", name: "1080p", width: 1920, height: 1080, transparent: false },
-  { id: "a4", name: "A4", width: 2480, height: 3508, transparent: false },
-  { id: "4k", name: "4K", width: 3840, height: 2160, transparent: false },
+  {
+    id: "1080p",
+    name: "1080p",
+    width: 1920,
+    height: 1080,
+    transparent: false,
+    padding: 24,
+    pngScale: 1,
+    fileTemplate: "{title}-{date}",
+  },
+  {
+    id: "a4",
+    name: "A4",
+    width: 2480,
+    height: 3508,
+    transparent: false,
+    padding: 48,
+    pngScale: 1,
+    fileTemplate: "{title}-{date}",
+  },
+  {
+    id: "4k",
+    name: "4K",
+    width: 3840,
+    height: 2160,
+    transparent: false,
+    padding: 36,
+    pngScale: 2,
+    fileTemplate: "{title}-{date}",
+  },
 ];
 
 const EXPORT_PRESET_STORAGE_KEY = "streaming-export-presets-v1";
@@ -657,29 +687,50 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const exportPng = async () => {
     const serialized = exportSvgString;
     if (!serialized) return;
-    const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      const scale = Math.max(1, Math.min(4, exportPngScale));
-      canvas.width = Math.round(exportWidth * scale);
-      canvas.height = Math.round(exportHeight * scale);
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      if (!exportTransparentBg) {
-        context.fillStyle = currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-      }
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const png = canvas.toDataURL("image/png");
-      const anchor = document.createElement("a");
-      anchor.href = png;
-      anchor.download = `${resolvedExportBaseName}.png`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    };
-    image.src = url;
+
+    await new Promise<void>((resolve, reject) => {
+      const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const image = new Image();
+
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const scale = Math.max(1, Math.min(4, exportPngScale));
+        canvas.width = Math.round(exportWidth * scale);
+        canvas.height = Math.round(exportHeight * scale);
+        const context = canvas.getContext("2d");
+        if (!context) {
+          URL.revokeObjectURL(url);
+          resolve();
+          return;
+        }
+        if (!exportTransparentBg) {
+          context.fillStyle = currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const png = canvas.toDataURL("image/png");
+        const anchor = document.createElement("a");
+        anchor.href = png;
+        anchor.download = `${resolvedExportBaseName}.png`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Failed to render PNG"));
+      };
+
+      image.src = url;
+    });
+  };
+
+  const exportAll = () => {
+    exportSvg();
+    exportHtml();
+    void exportPng();
   };
 
   const applyUploadedFile = async (file: File) => {
@@ -907,6 +958,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setExportWidth(preset.width);
     setExportHeight(preset.height);
     setExportTransparentBg(preset.transparent);
+    if (typeof preset.padding === "number") {
+      setExportPadding(Math.max(0, Math.min(300, preset.padding)));
+    }
+    if (typeof preset.pngScale === "number") {
+      setExportPngScale(Math.max(1, Math.min(4, Math.round(preset.pngScale))));
+    }
+    if (typeof preset.fileTemplate === "string" && preset.fileTemplate.trim().length > 0) {
+      setExportFileTemplate(preset.fileTemplate);
+    }
   };
 
   const saveCurrentAsPreset = () => {
@@ -918,6 +978,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       width: exportWidth,
       height: exportHeight,
       transparent: exportTransparentBg,
+      padding: exportPadding,
+      pngScale: exportPngScale,
+      fileTemplate: exportFileTemplate,
     };
     setCustomExportPresets((prev) => [preset, ...prev]);
     setNewPresetName("");
@@ -1140,6 +1203,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             <Download className="h-3.5 w-3.5" />
             HTML
           </button>
+          <button
+            onClick={exportAll}
+            className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            <Download className="h-3.5 w-3.5" />
+            All
+          </button>
         </div>
       </header>
 
@@ -1167,7 +1237,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               >
                 <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
                 <p className="mt-0.5 text-[10px] text-slate-500">
-                  {doc.format.toUpperCase()} · {new Date(doc.updatedAt).toLocaleString()}
+                  {doc.format.toUpperCase()} 璺?{new Date(doc.updatedAt).toLocaleString()}
                 </p>
               </button>
             ))}
@@ -2143,7 +2213,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       onClick={() => applyExportPreset(preset)}
                       className="flex-1 rounded border bg-white px-2 py-1 text-left text-[10px] font-medium text-slate-700"
                     >
-                      {preset.name} ({preset.width}x{preset.height})
+                      {preset.name} ({preset.width}x{preset.height}, p{preset.padding ?? 0}, {preset.pngScale ?? 1}x)
                     </button>
                     {!builtIn && (
                       <button
@@ -2256,3 +2326,4 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     </div>
   );
 }
+

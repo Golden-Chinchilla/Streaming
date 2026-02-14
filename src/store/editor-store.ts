@@ -5,6 +5,7 @@ import { ParseIssue, parseSankeyText, parseSankeyTextDetailed } from "@/lib/pars
 import { blankDocument } from "@/lib/templates";
 import { DataFormat, SankeyDocument, SankeyGraph, SankeyStyle } from "@/lib/types";
 import { linkStyleKey } from "@/lib/utils";
+import { DARK_LABEL_COLOR, LIGHT_LABEL_COLOR } from "@/lib/theme";
 
 const HISTORY_LIMIT = 60;
 const TEXT_HISTORY_GROUP_WINDOW_MS = 900;
@@ -70,9 +71,12 @@ function normalizeDocument(document: SankeyDocument): SankeyDocument {
       ...style,
       theme: style.theme ?? "light",
       palette: style.palette ?? "classic",
+      labelStyle: style.labelStyle ?? "badge",
+      linkRender: style.linkRender ?? "soft",
+      colorStrategy: style.colorStrategy === "semantic" ? "palette" : (style.colorStrategy ?? "palette"),
       labelFontSize: style.labelFontSize ?? 12,
       labelPosition: style.labelPosition ?? "outside",
-      labelColor: style.labelColor ?? (style.theme === "dark" ? "#cbd5e1" : "#334155"),
+      labelColor: style.labelColor ?? (style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR),
       labelFontFamily: style.labelFontFamily ?? "Roboto",
     },
   };

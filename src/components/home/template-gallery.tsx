@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FileUp, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, FileUp, Plus, Search, Trash2 } from "lucide-react";
 import {
   clearRecentTemplateIds,
   deleteUserTemplate,
@@ -83,6 +83,18 @@ function detectFileFormat(fileName: string): DataFormat | "xlsx" | null {
   return null;
 }
 
+function formatRelativeTime(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  if (diffMs < 60_000) return "just now";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 export function TemplateGallery() {
   const { confirm, prompt, dialogNode } = useAppDialog();
   const [search, setSearch] = useState("");
@@ -91,6 +103,8 @@ export function TemplateGallery() {
   const [sourceMode, setSourceMode] = useState<SourceMode>("all");
   const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>("All");
   const [tagFilter, setTagFilter] = useState("All");
+  const [showRecentTemplatesInWorkspace, setShowRecentTemplatesInWorkspace] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [recentDocs, setRecentDocs] = useState<SankeyDocument[]>([]);
   const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
@@ -403,6 +417,22 @@ export function TemplateGallery() {
     }
   }, [pendingImport]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter") return;
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target !== document.body) return;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return;
+      event.preventDefault();
+      router.push("/editor");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [router]);
+
   const resetFilters = () => {
     setSearch("");
     setCategory("All");
@@ -619,30 +649,28 @@ export function TemplateGallery() {
     }).stats;
   }, [pendingImport, pendingMapping, pendingMinValue, pendingValuePolicy]);
 
-  const galleryCardClass = "rounded-xl border bg-white px-4 py-3 shadow-sm transition hover:border-blue-300";
-  const infoChipClass = "rounded border bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600";
-  const tagChipClass = "rounded border bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600";
-  const filterSelectClass = "rounded-lg border bg-white px-3 py-2 text-sm";
+  const galleryCardClass = "glass rounded-2xl px-4 py-3 shadow-sm transition hover:border-indigo-300/50";
+  const filterSelectClass = "rounded-lg border border-slate-600/70 bg-slate-900/70 px-3 py-2 text-sm text-slate-200";
   const tinyNeutralButtonClass = buttonSecondaryTiny;
-  const dangerBulkButtonClass = withDisabled("rounded-lg border px-3 py-2 text-sm text-red-600 transition hover:bg-red-50");
+  const dangerBulkButtonClass = withDisabled("rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300 transition hover:bg-rose-500/20");
   const deleteSelectedDisabledReason = "Select at least one custom template to enable bulk delete.";
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-20 border-b bg-white/85 backdrop-blur">
+    <div className="hero-gradient min-h-screen bg-background">
+      <header className="sticky top-0 z-20 border-b border-slate-700/60 bg-slate-950/55 backdrop-blur">
         <div className="mx-auto flex h-16 w-full max-w-[1500px] items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-sm font-bold text-blue-600">
+            <div className="animate-pulse-glow flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-pink-500 text-sm font-bold text-white">
               ST
             </div>
             <div>
-              <p className="text-sm font-semibold text-slate-900">Streaming</p>
-              <p className="text-xs text-slate-500">Professional Diagram Editor</p>
+              <p className="font-display type-section text-sm font-semibold text-slate-100">Streaming</p>
+              <p className="type-caption text-xs text-slate-500">Professional Diagram Editor</p>
             </div>
           </div>
           <Link
             href="/editor"
-            className={`inline-flex items-center gap-2 ${buttonPrimaryMd}`}
+            className={`inline-flex items-center gap-2 ${buttonSecondarySm}`}
           >
             Continue Editing
             <ArrowRight className="h-4 w-4" />
@@ -651,188 +679,223 @@ export function TemplateGallery() {
       </header>
 
       <main className="mx-auto w-full max-w-[1500px] px-6 py-8">
-        {recentDocs.length > 0 && (
-          <section className="mb-8">
-            <h2 className="mb-4 text-lg font-medium text-slate-900">Recent diagrams</h2>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {recentDocs.slice(0, 4).map((doc) => (
-                <Link
-                  key={doc.id}
-                  href={`/editor?doc=${encodeURIComponent(doc.id)}`}
-                  className={galleryCardClass}
-                >
-                  <p className="text-sm font-semibold text-slate-900">{doc.title || "Untitled Diagram"}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {doc.format.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
-                  </p>
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept=".csv,.json,.xlsx"
+          className="hidden"
+          onChange={onUploadInputChange}
+        />
 
-        {recentTemplates.length > 0 && (
-          <section className="mb-8">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-medium text-slate-900">Recent templates</h2>
-              <button
-                onClick={() => void clearRecentTemplates()}
-                className={`inline-flex items-center gap-1 ${buttonSecondarySm}`}
+        <section className="mb-12 grid grid-cols-1 gap-6 xl:grid-cols-12">
+          <div className="glass rounded-3xl border border-indigo-400/20 p-8 xl:col-span-7">
+            <h1 className="type-hero max-w-2xl text-4xl font-semibold text-slate-100">
+              Start your Sankey.
+            </h1>
+            <p className="type-body mt-4 max-w-xl text-sm text-slate-300">
+              From blank or from data.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link
+                href="/editor"
+                className={`inline-flex items-center gap-2 ${buttonPrimaryMd}`}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear Recent
+                New Diagram
+                <Plus className="h-4 w-4" />
+              </Link>
+              <button
+                type="button"
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={isUploading}
+                title={isUploading ? "Import in progress. Please wait." : "Upload CSV / JSON / XLSX"}
+                className={`inline-flex items-center gap-2 ${buttonSecondarySm} disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                <FileUp className="h-4 w-4" />
+                {isUploading ? "Importing..." : "Upload Data"}
               </button>
+              <Link
+                href="/editor"
+                className="type-caption inline-flex items-center gap-1 text-sm text-slate-300 transition hover:text-indigo-200"
+              >
+                Continue Editing
+                <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {recentTemplates.slice(0, 6).map((template) => {
-                const isUser = template.id.startsWith("user-");
-                return (
+          </div>
+
+          <div className="glass rounded-3xl border border-slate-700/70 p-5 xl:col-span-5">
+            <div className="mb-4">
+              <h2 className="type-section text-lg font-semibold text-slate-100">Recent</h2>
+            </div>
+            {recentDocs.length === 0 ? (
+              <div className={emptyStatePanelLg}>
+                <p className="type-caption text-sm text-slate-400">No recent documents yet.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                {recentDocs.slice(0, 4).map((doc) => (
                   <Link
-                    key={template.id}
-                    href={`/editor?template=${encodeURIComponent(template.id)}`}
+                    key={doc.id}
+                    href={`/editor?doc=${encodeURIComponent(doc.id)}`}
                     className={galleryCardClass}
                   >
-                    <p className="text-sm font-semibold text-slate-900">{template.name}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                      <span className={infoChipClass}>
-                        {template.difficulty}
-                      </span>
-                      <span className={infoChipClass}>
-                        {isUser ? "My template" : "Built-in"}
-                      </span>
-                      <span className="rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                        Recent
-                      </span>
-                    </div>
-                    <p className="mt-2 text-[11px] text-slate-500">Category: {template.category}</p>
-                    <p className="mt-1 text-xs text-slate-500">{template.description}</p>
-                    {(template.tags ?? []).length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {(template.tags ?? []).slice(0, 4).map((tag) => (
-                          <span
-                            key={`${template.id}-recent-tag-${tag}`}
-                            className={tagChipClass}
-                          >
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <p className="type-body text-sm font-semibold text-slate-100">{doc.title || "Untitled Diagram"}</p>
+                    <p className="type-caption mt-1 text-xs text-slate-400">
+                      {formatRelativeTime(doc.updatedAt)} • {doc.format.toUpperCase()}
+                    </p>
                   </Link>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        <section className="mb-8">
-          <h2 className="mb-4 text-lg font-medium text-slate-900">Start a new diagram</h2>
-          <input
-            ref={uploadInputRef}
-            type="file"
-            accept=".csv,.json,.xlsx"
-            className="hidden"
-            onChange={onUploadInputChange}
-          />
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            <Link
-              href="/editor"
-              className="group rounded-2xl border border-dashed border-slate-300 bg-white p-6 shadow-sm transition hover:border-blue-400 hover:shadow-md"
-            >
-              <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-700 group-hover:bg-blue-600 group-hover:text-white">
-                <Plus className="h-6 w-6" />
+                ))}
               </div>
-              <h3 className="text-base font-semibold text-slate-900">Blank Diagram</h3>
-              <p className="mt-1 text-sm text-slate-500">Start from scratch and import your data.</p>
-            </Link>
-            <button
-              type="button"
-              onClick={() => uploadInputRef.current?.click()}
-              disabled={isUploading}
-              title={isUploading ? "Import in progress. Please wait." : "Upload CSV / JSON / XLSX"}
-              className="group rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-left shadow-sm transition hover:border-emerald-400 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white">
-                <FileUp className="h-6 w-6" />
-              </div>
-              <h3 className="text-base font-semibold text-slate-900">Upload Data</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                {isUploading ? "Importing..." : "Upload CSV / JSON / XLSX and jump into editor."}
-              </p>
-            </button>
+            )}
           </div>
-                      <IssueCenter issues={uploadIssues} className="mt-4" />
         </section>
 
-        <section className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative min-w-[280px] flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search templates"
-                className="w-full rounded-lg border bg-white py-2 pl-9 pr-3 text-sm outline-none ring-0 transition focus:border-blue-300"
-              />
+        <IssueCenter issues={uploadIssues} className="mb-8" />
+
+        <section className="glass rounded-3xl border border-indigo-400/20 p-5 md:p-6">
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="type-section text-xl font-semibold text-slate-100">
+                Templates
+              </h2>
+              <p className="type-caption mt-1 text-sm text-slate-400">
+                Find one and start.
+              </p>
             </div>
-            <select
-              value={sourceMode}
-              onChange={(event) => setSourceMode(event.target.value as SourceMode)}
-              className={filterSelectClass}
-            >
-              <option value="all">Source: All</option>
-              <option value="user">Source: My templates</option>
-              <option value="builtin">Source: Built-in</option>
-            </select>
-            <select
-              value={difficultyFilter}
-              onChange={(event) => setDifficultyFilter(event.target.value as DifficultyFilter)}
-              className={filterSelectClass}
-            >
-              <option value="All">Difficulty: All</option>
-              <option value="Easy">Difficulty: Easy</option>
-              <option value="Medium">Difficulty: Medium</option>
-              <option value="Advanced">Difficulty: Advanced</option>
-            </select>
-            <select
-              value={tagFilter}
-              onChange={(event) => setTagFilter(event.target.value)}
-              className={filterSelectClass}
-            >
-              {tags.map((tag) => (
-                <option key={`tag-filter-${tag}`} value={tag}>
-                  Tag: {tag}
-                </option>
-              ))}
-            </select>
-            <select
-              value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as SortMode)}
-              className={filterSelectClass}
-            >
-              <option value="name">Sort: Name</option>
-              <option value="difficulty">Sort: Difficulty</option>
-              <option value="category">Sort: Category</option>
-            </select>
             <button
-              onClick={() => void removeSelectedUserTemplates()}
-              disabled={effectiveSelectedUserTemplateIds.length === 0}
-              className={dangerBulkButtonClass}
-              title={effectiveSelectedUserTemplateIds.length === 0 ? deleteSelectedDisabledReason : "Delete selected custom templates"}
+              onClick={() => setShowRecentTemplatesInWorkspace((prev) => !prev)}
+              className={`inline-flex items-center gap-1 ${buttonSecondarySm}`}
+              title={showRecentTemplatesInWorkspace ? "Hide recent templates" : "Show recent templates"}
             >
-              Delete selected ({effectiveSelectedUserTemplateIds.length})
+              Recent
+              {showRecentTemplatesInWorkspace ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          {showRecentTemplatesInWorkspace && (
+            <div className="mb-6 rounded-2xl border border-slate-700/70 bg-slate-900/45 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="type-section text-base font-medium text-slate-100">Recent templates</h3>
+                {recentTemplates.length > 0 && (
+                  <button
+                    onClick={() => void clearRecentTemplates()}
+                    className={`inline-flex items-center gap-1 ${buttonSecondarySm}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Clear
+                  </button>
+                )}
+              </div>
+              {recentTemplates.length === 0 ? (
+                <div className="type-caption rounded-xl border border-slate-700/70 bg-slate-900/60 px-3 py-2 text-sm text-slate-400">
+                  No recent templates yet.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {recentTemplates.slice(0, 6).map((template) => {
+                    return (
+                      <Link
+                        key={template.id}
+                        href={`/editor?template=${encodeURIComponent(template.id)}`}
+                        className={galleryCardClass}
+                      >
+                        <p className="type-body text-sm font-semibold text-slate-100">{template.name}</p>
+                        <p className="type-caption mt-2 text-[11px] text-slate-400">Category: {template.category}</p>
+                        <p className="type-caption mt-1 text-xs text-slate-400">Difficulty: {template.difficulty}</p>
+                        <span className="mt-2 inline-flex rounded border border-indigo-400/35 bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium text-indigo-200">
+                          Recent
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mb-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative min-w-[240px] flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search"
+                  className="w-full rounded-lg border border-slate-600/70 bg-slate-900/70 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-indigo-400"
+                />
+              </div>
+              <select
+                value={sourceMode}
+                onChange={(event) => setSourceMode(event.target.value as SourceMode)}
+                className={filterSelectClass}
+              >
+                <option value="all">Source: All</option>
+                <option value="user">Source: My templates</option>
+                <option value="builtin">Source: Built-in</option>
+              </select>
+              <button
+                onClick={() => setShowAdvancedFilters((prev) => !prev)}
+                className={`inline-flex items-center gap-1 ${buttonSecondarySm}`}
+                title={showAdvancedFilters ? "Hide filters" : "Show filters"}
+              >
+                Filters
+                {showAdvancedFilters ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+            </div>
+
+            {showAdvancedFilters && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <select
+                  value={difficultyFilter}
+                  onChange={(event) => setDifficultyFilter(event.target.value as DifficultyFilter)}
+                  className={filterSelectClass}
+                >
+                  <option value="All">Difficulty: All</option>
+                  <option value="Easy">Difficulty: Easy</option>
+                  <option value="Medium">Difficulty: Medium</option>
+                  <option value="Advanced">Difficulty: Advanced</option>
+                </select>
+                <select
+                  value={tagFilter}
+                  onChange={(event) => setTagFilter(event.target.value)}
+                  className={filterSelectClass}
+                >
+                  {tags.map((tag) => (
+                    <option key={`tag-filter-${tag}`} value={tag}>
+                      Tag: {tag}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.target.value as SortMode)}
+                  className={filterSelectClass}
+                >
+                  <option value="name">Sort: Name</option>
+                  <option value="difficulty">Sort: Difficulty</option>
+                  <option value="category">Sort: Category</option>
+                </select>
+                <button
+                  onClick={() => void removeSelectedUserTemplates()}
+                  disabled={effectiveSelectedUserTemplateIds.length === 0}
+                  className={dangerBulkButtonClass}
+                  title={effectiveSelectedUserTemplateIds.length === 0 ? deleteSelectedDisabledReason : "Delete selected custom templates"}
+                >
+                  Delete ({effectiveSelectedUserTemplateIds.length})
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4 flex flex-wrap items-center gap-2">
             {categories.map((item) => (
               <button
                 key={item}
                 onClick={() => setCategory(item)}
                 className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                   category === item
-                    ? "bg-slate-900 text-white"
-                    : "border bg-white text-slate-600 hover:bg-slate-50"
+                    ? "border border-indigo-400/50 bg-indigo-500/20 text-indigo-100"
+                    : "border border-slate-600 bg-slate-900/70 text-slate-300 hover:bg-slate-800"
                 }`}
               >
                 {item}
@@ -848,22 +911,24 @@ export function TemplateGallery() {
             )}
           </div>
 
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-medium text-slate-900">Featured Templates</h2>
-            <p className="text-sm text-slate-500">{filteredTemplates.length} templates</p>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="type-section text-lg font-semibold text-slate-100">
+              Featured <span className="gradient-text">Templates</span>
+            </h2>
+            <p className="type-caption text-sm text-slate-400">{filteredTemplates.length} templates</p>
           </div>
 
           {filteredTemplates.length === 0 ? (
             <div className={emptyStatePanelLg}>
-              <p className="text-base font-medium text-slate-900">No templates found</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Try another keyword or reset filters to view all templates.
+              <p className="type-section text-base font-medium text-slate-100">No results</p>
+              <p className="type-body mt-1 text-sm text-slate-400">
+                Try another filter.
               </p>
               <button
                 onClick={resetFilters}
                 className={`mt-4 ${buttonPrimaryMd}`}
               >
-                Reset Filters
+                Reset
               </button>
             </div>
           ) : (
@@ -876,55 +941,26 @@ export function TemplateGallery() {
                   <Link
                     key={template.id}
                     href={`/editor?template=${encodeURIComponent(template.id)}`}
-                    className="group overflow-hidden rounded-2xl border bg-white shadow-sm transition hover:border-blue-300 hover:shadow-lg"
+                    className="group glass overflow-hidden rounded-2xl shadow-sm transition duration-300 hover:-translate-y-1 hover:border-indigo-300/50 hover:shadow-lg"
                   >
                     <div className={`relative h-44 bg-gradient-to-br ${template.accent} p-5 text-white`}>
-                      <span className="rounded-md bg-white/20 px-2 py-1 text-[11px] font-semibold uppercase">
-                        {template.difficulty}
-                      </span>
-                      <span className="ml-2 rounded-md bg-black/20 px-2 py-1 text-[10px] font-semibold uppercase">
-                        {isUser ? "My template" : "Built-in"}
-                      </span>
                       {isRecent && (
-                        <span className="ml-2 rounded-md bg-blue-500/30 px-2 py-1 text-[10px] font-semibold uppercase">
+                        <span className="rounded-md border border-indigo-300/35 bg-indigo-500/25 px-2 py-1 text-[10px] font-semibold uppercase">
                           Recent
                         </span>
                       )}
                       <div className="absolute bottom-4 left-5 right-5">
-                        <p className="text-sm opacity-85">{template.category}</p>
-                        <h3 className="text-xl font-semibold">{template.name}</h3>
+                        <p className="type-caption text-sm opacity-85">{template.category}</p>
+                        <h3 className="type-hero text-xl font-semibold">{template.name}</h3>
                       </div>
                     </div>
                     <div className="p-4">
-                      <div className="flex flex-wrap items-center gap-1">
-                        <span className={infoChipClass}>
-                          {template.difficulty}
-                        </span>
-                        <span className={infoChipClass}>
-                          {isUser ? "My template" : "Built-in"}
-                        </span>
-                        {isRecent && (
-                          <span className="rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                            Recent
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-2 text-[11px] text-slate-500">Category: {template.category}</p>
-                      <p className="mt-1 text-sm text-slate-500">{template.description}</p>
-                      {(template.tags ?? []).length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {(template.tags ?? []).slice(0, 4).map((tag) => (
-                            <span
-                              key={`${template.id}-tag-${tag}`}
-                              className={tagChipClass}
-                            >
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-blue-600">
-                        Use template
+                      <p className="type-caption mt-2 text-[11px] text-slate-400">Category: {template.category}</p>
+                      <p className="type-caption mt-1 text-xs text-slate-400">Difficulty: {template.difficulty}</p>
+                      <p className="type-caption mt-2 text-xs text-slate-500">
+                        {isUser ? "My template" : "Built-in"}
+                      </p>
+                      <div className="mt-2 inline-flex items-center text-indigo-300">
                         <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
                       </div>
                       {isUser && (

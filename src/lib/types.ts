@@ -18,6 +18,9 @@ export type SankeyStyle = {
   nodeRadius: number;
   linkOpacity: number;
   curvature: number;
+  labelStyle?: "plain" | "badge";
+  linkRender?: "flat" | "soft";
+  colorStrategy?: "palette" | "semantic";
   showLabels: boolean;
   labelFontSize: number;
   labelPosition: "inside" | "outside";

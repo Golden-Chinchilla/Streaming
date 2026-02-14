@@ -1,4 +1,5 @@
-﻿import { SankeyStyle, TemplateSummary } from "@/lib/types";
+import { SankeyStyle, TemplateSummary } from "@/lib/types";
+import { DARK_LABEL_COLOR } from "@/lib/theme";
 
 const defaultStyle: SankeyStyle = {
   nodeWidth: 20,
@@ -6,13 +7,16 @@ const defaultStyle: SankeyStyle = {
   nodeRadius: 4,
   linkOpacity: 0.6,
   curvature: 0.5,
+  labelStyle: "badge",
+  linkRender: "soft",
+  colorStrategy: "palette",
   showLabels: true,
   labelFontSize: 12,
   labelPosition: "outside",
-  labelColor: "#334155",
-  labelFontFamily: "Roboto",
-  theme: "light",
-  palette: "classic",
+  labelColor: DARK_LABEL_COLOR,
+  labelFontFamily: "System Sans",
+  theme: "dark",
+  palette: "ocean",
 };
 
 const energyJson = `[
@@ -117,5 +121,6 @@ export function templateById(templateId?: string | null) {
   }
   return templateList.find((template) => template.id === templateId);
 }
+
 
 

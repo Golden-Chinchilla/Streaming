@@ -72,11 +72,11 @@ export function useAppDialog() {
     const confirmButtonClass = isDanger ? buttonDangerSm : buttonPrimarySm;
 
     return (
-      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/45 p-4">
-        <div className="w-full max-w-md rounded-xl border bg-white p-4 shadow-xl">
-          <p className="text-sm font-semibold text-slate-900">{dialog.options.title}</p>
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-[color:color-mix(in_srgb,var(--bg-overlay)_80%,transparent)] p-4 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_92%,transparent)] p-5 shadow-xl">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">{dialog.options.title}</p>
           {dialog.options.message && (
-            <p className="mt-2 text-sm text-slate-600">{dialog.options.message}</p>
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">{dialog.options.message}</p>
           )}
 
           {dialog.type === "prompt" && (
@@ -85,7 +85,7 @@ export function useAppDialog() {
               value={promptValue}
               onChange={(event) => setPromptValue(event.target.value)}
               placeholder={dialog.options.placeholder}
-              className="mt-3 w-full rounded border px-2 py-1.5 text-sm outline-none focus:border-blue-300"
+              className="mt-3 w-full rounded border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--primary)]"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();

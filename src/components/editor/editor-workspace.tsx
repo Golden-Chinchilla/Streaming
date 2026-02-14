@@ -1,22 +1,21 @@
-﻿"use client";
+"use client";
 
-import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
-import NextImage from "next/image";
 import { useRouter } from "next/navigation";
 import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
   CopyPlus,
-  FileText,
   Download,
   FileUp,
-  Hand,
   LayoutTemplate,
-  LocateFixed,
-  MousePointer2,
+  GripVertical,
+  Moon,
   Play,
   Redo2,
-  RotateCcw,
-  Trash2,
+  Sun,
   Undo2,
   WandSparkles,
 } from "lucide-react";
@@ -63,7 +62,12 @@ import {
   TemplateSummary,
 } from "@/lib/types";
 import { AppIssue } from "@/lib/issues";
-import { linkStyleKey } from "@/lib/utils";
+import {
+  DARK_LABEL_COLOR,
+  EXPORT_BG_DARK,
+  EXPORT_BG_LIGHT,
+  LIGHT_LABEL_COLOR,
+} from "@/lib/theme";
 import { SankeyMonacoEditor } from "@/components/editor/monaco-editor";
 import { SankeyCanvas } from "@/components/editor/sankey-canvas";
 import { IssueCenter } from "@/components/common/issue-center";
@@ -72,7 +76,6 @@ import {
   buttonPrimarySm,
   buttonSecondaryTiny,
   buttonDangerSoftTiny,
-  emptyStatePanelSm,
   withDisabled,
 } from "@/components/common/interaction-styles";
 import { useEditorStore } from "@/store/editor-store";
@@ -100,54 +103,10 @@ type Props = {
   docId?: string;
 };
 
-type ExportPreset = {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  transparent: boolean;
-  padding?: number;
-  pngScale?: number;
-  fileTemplate?: string;
-};
-
-const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
-  {
-    id: "1080p",
-    name: "1080p",
-    width: 1920,
-    height: 1080,
-    transparent: false,
-    padding: 24,
-    pngScale: 1,
-    fileTemplate: "{title}-{date}",
-  },
-  {
-    id: "a4",
-    name: "A4",
-    width: 2480,
-    height: 3508,
-    transparent: false,
-    padding: 48,
-    pngScale: 1,
-    fileTemplate: "{title}-{date}",
-  },
-  {
-    id: "4k",
-    name: "4K",
-    width: 3840,
-    height: 2160,
-    transparent: false,
-    padding: 36,
-    pngScale: 2,
-    fileTemplate: "{title}-{date}",
-  },
-];
-
-const EXPORT_PRESET_STORAGE_KEY = "streaming-export-presets-v1";
 const EXPORT_SETTINGS_STORAGE_KEY = "streaming-export-settings-v1";
 const MAPPING_PRESETS_STORAGE_KEY = "streaming-mapping-presets-v1";
 const STYLE_PRESET_STORAGE_KEY = "streaming-style-presets-v1";
+const LEFT_WORKBENCH_MODE_STORAGE_KEY = "streaming-editor-left-workbench-mode-v1";
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
 const USER_TEMPLATE_ACCENTS = [
@@ -168,8 +127,8 @@ const AUTO_LAYOUT_STRATEGY_OPTIONS: Array<{ id: AutoLayoutStrategy; label: strin
   { id: "spacious", label: "Spacious" },
   { id: "centered", label: "Centered" },
 ];
-const LAYOUT_TOP = 24;
-const LAYOUT_BOTTOM = 676;
+const LAYOUT_TOP = 30;
+const LAYOUT_BOTTOM = 670;
 
 function clampLayoutTop(top: number, nodeHeight: number) {
   return Math.max(LAYOUT_TOP, Math.min(LAYOUT_BOTTOM - nodeHeight, top));
@@ -185,15 +144,15 @@ function buildLayoutByStrategy(
       ? Math.max(6, Math.round(style.nodePadding * 0.65))
       : strategy === "spacious"
         ? Math.min(48, Math.round(style.nodePadding * 1.45))
-        : style.nodePadding;
+        : Math.min(52, Math.round(style.nodePadding * 1.2));
 
   const generator = sankey<LayoutNodeDatum, LayoutLinkDatum>()
     .nodeId((node) => node.id)
     .nodeWidth(style.nodeWidth)
     .nodePadding(paddingByStrategy)
     .extent([
-      [LAYOUT_TOP, LAYOUT_TOP],
-      [1176, LAYOUT_BOTTOM],
+      [44, LAYOUT_TOP],
+      [1156, LAYOUT_BOTTOM],
     ]);
 
   const built: LayoutGraph = generator({
@@ -256,10 +215,13 @@ const DEFAULT_STYLE_PRESETS: StylePreset[] = [
       nodeRadius: 3,
       linkOpacity: 0.45,
       curvature: 0.5,
+      labelStyle: "badge",
+      linkRender: "soft",
+      colorStrategy: "palette",
       showLabels: true,
       labelFontSize: 12,
       labelPosition: "outside",
-      labelColor: "#334155",
+      labelColor: LIGHT_LABEL_COLOR,
       labelFontFamily: "Roboto",
     },
   },
@@ -276,10 +238,13 @@ const DEFAULT_STYLE_PRESETS: StylePreset[] = [
       nodeRadius: 4,
       linkOpacity: 0.55,
       curvature: 0.45,
+      labelStyle: "badge",
+      linkRender: "soft",
+      colorStrategy: "palette",
       showLabels: true,
       labelFontSize: 12,
       labelPosition: "outside",
-      labelColor: "#cbd5e1",
+      labelColor: DARK_LABEL_COLOR,
       labelFontFamily: "Google Sans",
     },
   },
@@ -296,11 +261,60 @@ const DEFAULT_STYLE_PRESETS: StylePreset[] = [
       nodeRadius: 2,
       linkOpacity: 0.5,
       curvature: 0.4,
+      labelStyle: "plain",
+      linkRender: "flat",
+      colorStrategy: "palette",
       showLabels: true,
       labelFontSize: 11,
       labelPosition: "inside",
-      labelColor: "#1f2937",
+      labelColor: "#0f172a",
       labelFontFamily: "System Sans",
+    },
+  },
+  {
+    id: "style-editorial-light",
+    name: "Editorial Light",
+    builtIn: true,
+    style: {
+      ...blankDocument.style,
+      theme: "light",
+      palette: "classic",
+      nodeWidth: 22,
+      nodePadding: 21,
+      nodeRadius: 4,
+      linkOpacity: 0.52,
+      curvature: 0.48,
+      labelStyle: "badge",
+      linkRender: "soft",
+      colorStrategy: "palette",
+      showLabels: true,
+      labelFontSize: 12,
+      labelPosition: "outside",
+      labelColor: LIGHT_LABEL_COLOR,
+      labelFontFamily: "Google Sans",
+    },
+  },
+  {
+    id: "style-editorial-dark",
+    name: "Editorial Dark",
+    builtIn: true,
+    style: {
+      ...blankDocument.style,
+      theme: "dark",
+      palette: "ocean",
+      nodeWidth: 22,
+      nodePadding: 21,
+      nodeRadius: 4,
+      linkOpacity: 0.56,
+      curvature: 0.48,
+      labelStyle: "badge",
+      linkRender: "soft",
+      colorStrategy: "palette",
+      showLabels: true,
+      labelFontSize: 12,
+      labelPosition: "outside",
+      labelColor: DARK_LABEL_COLOR,
+      labelFontFamily: "Google Sans",
     },
   },
 ];
@@ -311,8 +325,11 @@ type MappingPreset = {
   mapping: TableMapping;
   createdAt: number;
 };
+
+type LeftWorkbenchMode = "collapsed" | "compact" | "expanded";
+type ActiveWorkspaceOverlay = "none" | "left";
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
-  defaultTheme: "light",
+  defaultTheme: "dark",
   defaultPerformanceMode: "auto",
   defaultExportTransparentBg: false,
   defaultExportFileTemplate: "{title}-{date}",
@@ -357,6 +374,30 @@ function loadExportSettingsFromStorage() {
   }
 }
 
+function defaultLeftWorkbenchModeByWidth(width: number): LeftWorkbenchMode {
+  if (width >= 1600) return "compact";
+  if (width >= 1200) return "collapsed";
+  return "collapsed";
+}
+
+function loadLeftWorkbenchModeFromStorage(): LeftWorkbenchMode {
+  if (typeof window === "undefined") return "compact";
+  const byWidth = defaultLeftWorkbenchModeByWidth(window.innerWidth);
+  try {
+    const raw = window.localStorage.getItem(LEFT_WORKBENCH_MODE_STORAGE_KEY);
+    if (raw === "collapsed" || raw === "compact" || raw === "expanded") return raw;
+    return byWidth;
+  } catch {
+    return byWidth;
+  }
+}
+
+function viewportRange(width: number): "wide" | "medium" | "narrow" {
+  if (width >= 1600) return "wide";
+  if (width >= 1200) return "medium";
+  return "narrow";
+}
+
 export function EditorWorkspace({ templateId, docId }: Props) {
   const router = useRouter();
   const { confirm, prompt, dialogNode } = useAppDialog();
@@ -392,15 +433,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [valueMinWhenClamped, setValueMinWhenClamped] = useState(1);
   const [sourceFileName, setSourceFileName] = useState<string>("");
   const [sourceError, setSourceError] = useState<string>("");
-  const [importFlowAppliedCount, setImportFlowAppliedCount] = useState(0);
   const [pastedCsv, setPastedCsv] = useState<string>("");
   const [pastedJson, setPastedJson] = useState<string>("");
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
-  const [interactionMode, setInteractionMode] = useState<"select" | "pan">("select");
+  const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [canvasResetKey, setCanvasResetKey] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [selectionColor, setSelectionColor] = useState("#3b82f6");
-  const [selectionOpacity, setSelectionOpacity] = useState(100);
   const [performanceMode, setPerformanceMode] = useState<PerformanceMode>("auto");
   const [exportWidth, setExportWidth] = useState(initialExportSettings.width);
   const [exportHeight, setExportHeight] = useState(initialExportSettings.height);
@@ -408,31 +446,16 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [exportPngScale, setExportPngScale] = useState(initialExportSettings.pngScale);
   const [exportTransparentBg, setExportTransparentBg] = useState(initialExportSettings.transparent);
   const [exportFileTemplate, setExportFileTemplate] = useState(initialExportSettings.fileTemplate);
-  const [exportAllFormats, setExportAllFormats] = useState<{ svg: boolean; png: boolean; html: boolean }>({
+  const [exportAllFormats] = useState<{ svg: boolean; png: boolean; html: boolean }>({
     svg: true,
     png: true,
     html: true,
   });
-  const [exportAllNamingMode, setExportAllNamingMode] = useState<"same" | "suffix">("suffix");
-  const [rightPanelTab, setRightPanelTab] = useState<"inspect" | "style" | "export" | "studio">("inspect");
-  const [customExportPresets, setCustomExportPresets] = useState<ExportPreset[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const saved = window.localStorage.getItem(EXPORT_PRESET_STORAGE_KEY);
-      if (!saved) return [];
-      const parsed = JSON.parse(saved) as ExportPreset[];
-      return parsed.filter(
-        (item) =>
-          typeof item.id === "string" &&
-          typeof item.name === "string" &&
-          Number.isFinite(item.width) &&
-          Number.isFinite(item.height) &&
-          typeof item.transparent === "boolean",
-      );
-    } catch {
-      return [];
-    }
-  });
+  const [exportAllNamingMode] = useState<"same" | "suffix">("suffix");
+  const [viewportWidth, setViewportWidth] = useState<number>(typeof window === "undefined" ? 1600 : window.innerWidth);
+  const [leftWorkbenchMode, setLeftWorkbenchMode] = useState<LeftWorkbenchMode>(loadLeftWorkbenchModeFromStorage);
+  const leftWorkbenchVisible = leftWorkbenchMode !== "collapsed";
+  const [activeWorkspaceOverlay, setActiveWorkspaceOverlay] = useState<ActiveWorkspaceOverlay>("none");
   const [mappingPresets, setMappingPresets] = useState<MappingPreset[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -452,7 +475,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       return [];
     }
   });
-  const [newPresetName, setNewPresetName] = useState("");
   const [customStylePresets, setCustomStylePresets] = useState<StylePreset[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -476,6 +498,23 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [showShortcutHints, setShowShortcutHints] = useState(false);
   const [canvasActionIssue, setCanvasActionIssue] = useState<AppIssue | null>(null);
   const [exportIssues, setExportIssues] = useState<AppIssue[]>([]);
+  const [showFileMenu, setShowFileMenu] = useState(false);
+  const [showViewMenu, setShowViewMenu] = useState(false);
+  const [showLabelsMenu, setShowLabelsMenu] = useState(false);
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [showAutoLayoutMenu, setShowAutoLayoutMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
+  const fileMenuRef = useRef<HTMLDivElement | null>(null);
+  const viewMenuRef = useRef<HTMLDivElement | null>(null);
+  const labelsMenuRef = useRef<HTMLDivElement | null>(null);
+  const layoutMenuRef = useRef<HTMLDivElement | null>(null);
+  const autoLayoutMenuRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceQuickMenuRef = useRef<HTMLDivElement | null>(null);
+  const viewportRangeRef = useRef<"wide" | "medium" | "narrow">(
+    viewportRange(typeof window === "undefined" ? 1600 : window.innerWidth),
+  );
 
   const {
     document: currentDoc,
@@ -504,11 +543,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSelectedLinkIndex,
     clearSelection,
     setTraceMode,
-    applyNodeColorToSelection,
-    applyNodeOpacityToSelection,
-    clearNodeColorFromSelection,
     clearSelectedNodeStyles,
-    patchSelectedLinkStyle,
     clearSelectedLinkStyle,
     undo,
     redo,
@@ -608,6 +643,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     };
   }, [currentDoc.id, currentDoc.updatedAt, hasHydrated]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.setAttribute("data-theme", currentDoc.style.theme);
+  }, [currentDoc.style.theme]);
+
   const allTemplates = useMemo(() => {
     return [...templateList, ...userTemplates];
   }, [userTemplates]);
@@ -702,6 +742,67 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     selectableUserTemplateIds.every((id) => effectiveSelectedUserTemplateIds.includes(id));
 
   useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (fileMenuRef.current && !fileMenuRef.current.contains(target)) {
+        setShowFileMenu(false);
+      }
+      if (viewMenuRef.current && !viewMenuRef.current.contains(target)) {
+        setShowViewMenu(false);
+      }
+      if (labelsMenuRef.current && !labelsMenuRef.current.contains(target)) {
+        setShowLabelsMenu(false);
+      }
+      if (layoutMenuRef.current && !layoutMenuRef.current.contains(target)) {
+        setShowLayoutMenu(false);
+      }
+      if (autoLayoutMenuRef.current && !autoLayoutMenuRef.current.contains(target)) {
+        setShowAutoLayoutMenu(false);
+      }
+      if (exportMenuRef.current && !exportMenuRef.current.contains(target)) {
+        setShowExportMenu(false);
+      }
+      if (workspaceQuickMenuRef.current && !workspaceQuickMenuRef.current.contains(target)) {
+        setShowWorkspaceQuickMenu(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(LEFT_WORKBENCH_MODE_STORAGE_KEY, leftWorkbenchMode);
+  }, [leftWorkbenchMode]);
+
+  useEffect(() => {
+    const nextRange = viewportRange(viewportWidth);
+    if (nextRange === viewportRangeRef.current) return;
+    viewportRangeRef.current = nextRange;
+
+    if (nextRange === "wide") {
+      setLeftWorkbenchMode("compact");
+      setShowWorkspaceQuickMenu(false);
+      return;
+    }
+    setLeftWorkbenchMode("collapsed");
+    setShowWorkspaceQuickMenu(false);
+  }, [viewportWidth]);
+
+  useEffect(() => {
+    if (leftWorkbenchVisible) {
+      setActiveWorkspaceOverlay("left");
+      return;
+    }
+    setActiveWorkspaceOverlay("none");
+  }, [leftWorkbenchVisible]);
+
+  useEffect(() => {
     const isEditingTarget = (target: EventTarget | null) => {
       const element = target as HTMLElement | null;
       if (!element) return false;
@@ -715,6 +816,32 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     const onKeyDown = (event: KeyboardEvent) => {
       const editing = isEditingTarget(event.target);
       const lower = event.key.toLowerCase();
+      if (
+        event.key === "Escape" &&
+        (showFileMenu || showViewMenu || showLabelsMenu || showLayoutMenu || showAutoLayoutMenu || showExportMenu)
+      ) {
+        setShowFileMenu(false);
+        setShowViewMenu(false);
+        setShowLabelsMenu(false);
+        setShowLayoutMenu(false);
+        setShowAutoLayoutMenu(false);
+        setShowExportMenu(false);
+        event.preventDefault();
+        return;
+      }
+      if (!editing && event.key === "Escape" && leftWorkbenchVisible) {
+        setLeftWorkbenchMode("collapsed");
+        setActiveWorkspaceOverlay("none");
+        event.preventDefault();
+        return;
+      }
+      if (!editing && event.code === "Space") {
+        if (!event.repeat) {
+          setIsSpacePanning(true);
+        }
+        event.preventDefault();
+        return;
+      }
 
       if (event.shiftKey && lower === "?" && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
@@ -728,7 +855,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           id: `shortcut-escape-${Date.now()}`,
           level: "info",
           title: "Selection cleared",
-          description: "锟斤拷菁锟? Escape",
+          description: "閿熸枻鎷疯弫閿? Escape",
         });
         return;
       }
@@ -754,7 +881,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             id: `shortcut-select-all-${Date.now()}`,
             level: "info",
             title: `Selected ${graph.nodes.length} nodes`,
-            description: "锟斤拷菁锟? Ctrl/Cmd+A",
+            description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+A",
           });
           return;
         }
@@ -766,7 +893,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               id: `shortcut-layout-reset-${Date.now()}`,
               level: "success",
               title: "Applied auto-layout: Default",
-              description: "锟斤拷菁锟? Ctrl/Cmd+Shift+L",
+              description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L",
             });
             return;
           }
@@ -776,7 +903,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             id: `shortcut-layout-${Date.now()}`,
             level: "success",
             title: `Applied auto-layout: ${AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === autoLayoutStrategy)?.label ?? autoLayoutStrategy}`,
-            description: "锟斤拷菁锟? Ctrl/Cmd+Shift+L",
+            description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L",
           });
           return;
         }
@@ -805,12 +932,26 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           id: `shortcut-delete-${Date.now()}`,
           level: "warning",
           title: "Cleared selected styles",
-          description: "锟斤拷菁锟? Delete / Backspace",
+          description: "閿熸枻鎷疯弫閿? Delete / Backspace",
         });
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        setIsSpacePanning(false);
+      }
+    };
+    const onBlur = () => {
+      setIsSpacePanning(false);
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [
     autoLayoutStrategy,
     clearNodePositions,
@@ -825,15 +966,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setNodePositions,
     setSelectedLinkIndex,
     setSelectedNodeIds,
+    showAutoLayoutMenu,
+    showExportMenu,
+    showFileMenu,
+    showLabelsMenu,
+    showLayoutMenu,
+    showViewMenu,
+    leftWorkbenchVisible,
     undo,
   ]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      EXPORT_PRESET_STORAGE_KEY,
-      JSON.stringify(customExportPresets),
-    );
-  }, [customExportPresets]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -964,10 +1105,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     ];
   }, [parseError]);
 
-  const canvasActionIssues = useMemo<AppIssue[]>(() => {
-    return canvasActionIssue ? [canvasActionIssue] : [];
-  }, [canvasActionIssue]);
-
   useEffect(() => {
     if (!canvasActionIssue) return;
     const timeoutId = window.setTimeout(() => {
@@ -987,6 +1124,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       .trim();
     return base.length > 0 ? base : safeTitle;
   }, [currentDoc.title, exportFileTemplate]);
+  const exportSolidBackground = currentDoc.style.theme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
 
   const exportSvgString = useMemo(() => {
     if (!svgElement) return "";
@@ -1024,23 +1162,18 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       background.setAttribute("y", "0");
       background.setAttribute("width", String(exportWidth));
       background.setAttribute("height", String(exportHeight));
-      background.setAttribute("fill", currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff");
+      background.setAttribute("fill", exportSolidBackground);
       cloned.insertBefore(background, cloned.firstChild);
     }
     return new XMLSerializer().serializeToString(cloned);
   }, [
-    currentDoc.style.theme,
+    exportSolidBackground,
     exportHeight,
     exportPadding,
     exportTransparentBg,
     exportWidth,
     svgElement,
   ]);
-
-  const exportPreviewUrl = useMemo(() => {
-    if (!exportSvgString) return null;
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvgString)}`;
-  }, [exportSvgString]);
 
   const filteredSortedRows = useMemo(() => {
     if (!sourcePreview) return [];
@@ -1082,11 +1215,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const totalSourcePages = useMemo(() => {
     return Math.max(1, Math.ceil(filteredSortedRows.length / sourcePageSize));
   }, [filteredSortedRows.length, sourcePageSize]);
-
-  const allExportPresets = useMemo(
-    () => [...DEFAULT_EXPORT_PRESETS, ...customExportPresets],
-    [customExportPresets],
-  );
 
   const allStylePresets = useMemo(
     () => [...DEFAULT_STYLE_PRESETS, ...customStylePresets],
@@ -1132,48 +1260,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     mappingTransformPreview != null && mappingTransformPreview.stats.outputRows > 0;
 
 
-  const sourceFlowSteps = useMemo(() => {
-    const ingested = !!sourcePreview;
-    const mapped = ingested && sourceMappingIssues.length === 0;
-    const reviewed = mapped && mappingTransformPreview != null;
-    const applied = importFlowAppliedCount > 0;
-
-    const steps = [
-      {
-        id: 1,
-        title: "1. Ingest",
-        done: ingested,
-        hint: ingested ? `${sourcePreviewMode.toUpperCase()} data loaded` : "Upload or paste source",
-      },
-      {
-        id: 2,
-        title: "2. Map",
-        done: mapped,
-        hint: mapped ? "Mapping columns valid" : "Choose source/target/value",
-      },
-      {
-        id: 3,
-        title: "3. Review",
-        done: reviewed,
-        hint: reviewed ? "Preview and policy checked" : "Check health and table preview",
-      },
-      {
-        id: 4,
-        title: "4. Apply",
-        done: applied,
-        hint: applied ? "Applied to editor" : "Apply mapping to editor",
-      },
-    ];
-
-    const firstPending = steps.find((step) => !step.done)?.id ?? 4;
-    return steps.map((step) => ({ ...step, active: step.id === firstPending }));
-  }, [
-    sourcePreview,
-    sourceMappingIssues.length,
-    mappingTransformPreview,
-    importFlowAppliedCount,
-    sourcePreviewMode,
-  ]);
   const presetCompatibilityById = useMemo(() => {
     const status = new Map<string, { ok: boolean; reason: string }>();
     if (!sourcePreview) return status;
@@ -1232,33 +1318,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     return performanceProfile.recommendedMode;
   }, [performanceMode, performanceProfile.recommendedMode]);
 
-  const performanceIssues = useMemo<AppIssue[]>(() => {
-    const issues: AppIssue[] = [];
-
-    if (performanceProfile.tier === "heavy" || performanceProfile.tier === "extreme") {
-      issues.push({
-        id: "perf-heavy-graph",
-        level: performanceProfile.tier === "extreme" ? "warning" : "info",
-        title:
-          performanceProfile.tier === "extreme"
-            ? "Extreme graph size detected"
-            : "Heavy graph size detected",
-        description: `Recommended mode: ${performanceProfile.recommendedMode}`,
-      });
-    }
-
-    if (performanceMode !== "auto" && performanceMode !== performanceProfile.recommendedMode) {
-      issues.push({
-        id: "perf-mode-mismatch",
-        level: "warning",
-        title: "Current mode differs from recommendation",
-        description: `Current: ${performanceMode}, recommended: ${performanceProfile.recommendedMode}`,
-      });
-    }
-
-    return issues;
-  }, [performanceMode, performanceProfile.recommendedMode, performanceProfile.tier]);
-
   const renderHints = useMemo(() => {
     if (effectivePerformanceMode === "quality") {
       return {
@@ -1298,38 +1357,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     };
   }, [effectivePerformanceMode, graphMetrics.links, graphMetrics.nodes, performanceProfile.tier]);
 
-  const selectedLink = useMemo(() => {
-    if (selectedLinkIndex == null) return null;
-    return graph.links[selectedLinkIndex] ?? null;
-  }, [graph.links, selectedLinkIndex]);
-
-  const selectedLinkStyle = useMemo(() => {
-    if (selectedLinkIndex == null) return null;
-    return currentDoc.linkStyles[linkStyleKey(selectedLinkIndex)] ?? null;
-  }, [currentDoc.linkStyles, selectedLinkIndex]);
-
-  const selectedNodeSummary = useMemo(() => {
-    if (selectedNodeIds.length === 0) return null;
-    const selectedSet = new Set(selectedNodeIds);
-    const inValue = graph.links
-      .filter((link) => selectedSet.has(link.target))
-      .reduce((sum, link) => sum + link.value, 0);
-    const outValue = graph.links
-      .filter((link) => selectedSet.has(link.source))
-      .reduce((sum, link) => sum + link.value, 0);
-    return { inValue, outValue };
-  }, [graph.links, selectedNodeIds]);
-
-  const singleSelectedNodeId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
-  const singleSelectedNodeColor = singleSelectedNodeId
-    ? currentDoc.nodeStyles[singleSelectedNodeId]?.color ?? ""
-    : "";
-  const singleSelectedNodeOpacity = singleSelectedNodeId
-    ? Math.round((currentDoc.nodeStyles[singleSelectedNodeId]?.opacity ?? 1) * 100)
-    : 100;
-  const batchSelectionOpacityValue = selectedNodeIds.length === 1 ? singleSelectedNodeOpacity : selectionOpacity;
-  const selectedLinkWidthScale = selectedLinkStyle?.widthScale ?? 1;
-
   const pushCanvasActionIssue = (
     level: AppIssue["level"],
     title: string,
@@ -1349,7 +1376,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       pushCanvasActionIssue(
         "success",
         "Applied auto-layout: Default",
-        source === "shortcut" ? "锟斤拷菁锟? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
+        source === "shortcut" ? "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
       );
       return;
     }
@@ -1359,46 +1386,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     pushCanvasActionIssue(
       "success",
       `Applied auto-layout: ${label}`,
-      source === "shortcut" ? "锟斤拷菁锟? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
+      source === "shortcut" ? "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
     );
-  };
-
-  const applySelectionColorWithNotice = () => {
-    if (selectedNodeIds.length === 0) return;
-    applyNodeColorToSelection(selectionColor);
-    pushCanvasActionIssue("success", "Batch color applied", `${selectedNodeIds.length} nodes`);
-  };
-
-  const applySelectionOpacityWithNotice = () => {
-    if (selectedNodeIds.length === 0) return;
-    applyNodeOpacityToSelection(batchSelectionOpacityValue / 100);
-    pushCanvasActionIssue("success", "Batch opacity applied", `${selectedNodeIds.length} nodes`);
-  };
-
-  const resetSelectedNodeStylesWithNotice = () => {
-    if (selectedNodeIds.length === 0) return;
-    clearSelectedNodeStyles();
-    pushCanvasActionIssue("warning", "Reset selected node styles", `${selectedNodeIds.length} nodes`);
   };
 
   const clearSelectionWithNotice = () => {
     if (selectedNodeIds.length === 0 && selectedLinkIndex == null) return;
     clearSelection();
     pushCanvasActionIssue("info", "Selection cleared");
-  };
-
-  const applyRecommendedPerformanceMode = () => {
-    setPerformanceMode(performanceProfile.recommendedMode);
-    pushCanvasActionIssue(
-      "success",
-      `Performance mode set to ${performanceProfile.recommendedMode}`,
-      "Applied recommended mode for current graph size",
-    );
-  };
-
-  const switchToAutoPerformanceMode = () => {
-    setPerformanceMode("auto");
-    pushCanvasActionIssue("info", "Performance mode set to auto");
   };
 
   const saveCurrentStylePreset = async () => {
@@ -1594,7 +1589,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     const baseName = customBaseName ?? resolvedExportBaseName;
     const bodyStyle = exportTransparentBg
       ? "margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;"
-      : `margin:0;background:${currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff"};display:flex;justify-content:center;align-items:center;min-height:100vh;`;
+      : `margin:0;background:${exportSolidBackground};display:flex;justify-content:center;align-items:center;min-height:100vh;`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${currentDoc.title}</title></head><body style="${bodyStyle}">${serialized}</body></html>`;
     downloadFile(`${baseName}.html`, "text/html;charset=utf-8", html);
   };
@@ -1622,7 +1617,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           return;
         }
         if (!exportTransparentBg) {
-          context.fillStyle = currentDoc.style.theme === "dark" ? "#0f172a" : "#ffffff";
+          context.fillStyle = exportSolidBackground;
           context.fillRect(0, 0, canvas.width, canvas.height);
         }
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
@@ -1688,7 +1683,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
-      setImportFlowAppliedCount(0);
       setPastedJson(text);
       setActiveTab("source");
       return;
@@ -1703,7 +1697,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
-      setImportFlowAppliedCount(0);
       return;
     }
 
@@ -1715,7 +1708,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSourceSortDir("asc");
     setSourceFilter("");
     setSourcePage(1);
-    setImportFlowAppliedCount(0);
   };
 
   const onFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1767,9 +1759,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           ? `, clamped ${transformed.stats.clampedRows}`
           : ""),
     );
+    clearNodePositions();
     setFormat(sourcePreviewMode === "json" ? "json" : "csv");
     setEditorText(text);
-    setImportFlowAppliedCount((value) => value + 1);
     setActiveTab("editor");
   };
 
@@ -1781,7 +1773,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     });
     setSourceError("");
     setSourceNotice("");
-    setImportFlowAppliedCount(0);
   };
 
   const saveMappingPreset = async () => {
@@ -1844,7 +1835,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSourceError("");
     setSourceNotice(`Applied mapping preset: ${preset.name}`);
     setSourcePreview({ ...sourcePreview, mapping: preset.mapping });
-    setImportFlowAppliedCount(0);
   };
 
   const removeMappingPreset = (presetId: string) => {
@@ -1867,7 +1857,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
-      setImportFlowAppliedCount(0);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Failed to parse pasted CSV");
     }
@@ -1889,7 +1878,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       setSourceSortDir("asc");
       setSourceFilter("");
       setSourcePage(1);
-      setImportFlowAppliedCount(0);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Failed to parse pasted JSON");
     }
@@ -1903,6 +1891,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setSourceError("");
     setSourceNotice("");
     setSourceFileName("Pasted JSON");
+    clearNodePositions();
     if (sourcePreview && sourcePreviewMode === "json") {
       const mappedJson = rowsToCanonicalJson(sourcePreview.rows, sourcePreview.mapping);
       setFormat("json");
@@ -1921,42 +1910,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     }
     setSourceSortKey(header);
     setSourceSortDir("asc");
-  };
-
-  const applyExportPreset = (preset: ExportPreset) => {
-    setExportWidth(preset.width);
-    setExportHeight(preset.height);
-    setExportTransparentBg(preset.transparent);
-    if (typeof preset.padding === "number") {
-      setExportPadding(Math.max(0, Math.min(300, preset.padding)));
-    }
-    if (typeof preset.pngScale === "number") {
-      setExportPngScale(Math.max(1, Math.min(4, Math.round(preset.pngScale))));
-    }
-    if (typeof preset.fileTemplate === "string" && preset.fileTemplate.trim().length > 0) {
-      setExportFileTemplate(preset.fileTemplate);
-    }
-  };
-
-  const saveCurrentAsPreset = () => {
-    const name = newPresetName.trim();
-    if (!name) return;
-    const preset: ExportPreset = {
-      id: crypto.randomUUID(),
-      name,
-      width: exportWidth,
-      height: exportHeight,
-      transparent: exportTransparentBg,
-      padding: exportPadding,
-      pngScale: exportPngScale,
-      fileTemplate: exportFileTemplate,
-    };
-    setCustomExportPresets((prev) => [preset, ...prev]);
-    setNewPresetName("");
-  };
-
-  const removeCustomPreset = (presetId: string) => {
-    setCustomExportPresets((prev) => prev.filter((preset) => preset.id !== presetId));
   };
 
   const openDocumentById = async (nextDocId: string) => {
@@ -2181,71 +2134,70 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   };
 
   const isDarkTheme = currentDoc.style.theme === "dark";
-  const workspaceClass = isDarkTheme
-    ? "relative flex h-screen flex-col overflow-hidden bg-[#0b1220] text-slate-100"
-    : "relative flex h-screen flex-col overflow-hidden";
-  const headerClass = isDarkTheme
-    ? "flex h-14 items-center justify-between border-b border-slate-700 bg-slate-900/90 px-4 backdrop-blur"
-    : "flex h-14 items-center justify-between border-b bg-white/90 px-4 backdrop-blur";
-  const leftPanelClass = isDarkTheme
-    ? "flex w-[400px] min-w-[360px] flex-col border-r border-slate-700 bg-slate-900"
-    : "flex w-[400px] min-w-[360px] flex-col border-r bg-white";
-  const rightPanelClass = isDarkTheme
-    ? "w-[280px] min-w-[260px] space-y-4 border-l border-slate-700 bg-slate-900 p-4"
-    : "w-[280px] min-w-[260px] space-y-4 border-l bg-white p-4";
-  const canvasContainerClass = isDarkTheme
-    ? "min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,#1e293b_0%,#0f172a_60%)] p-6"
-    : "min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,#ffffff_0%,#f2f6fc_55%)] p-6";
-  const controlButtonClass = isDarkTheme
-    ? "inline-flex items-center gap-1 rounded-md border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
-    : "inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5 text-xs font-medium text-slate-600";
-  const controlButtonDisabledClass = `${controlButtonClass} disabled:cursor-not-allowed disabled:opacity-40`;
-  const controlButtonWideClass = isDarkTheme
-    ? "inline-flex items-center gap-1 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
-    : "inline-flex items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-slate-600";
-  const controlSelectClass = isDarkTheme
-    ? "h-8 rounded-md border border-slate-600 bg-slate-800 px-2 text-xs text-slate-100"
-    : "h-8 rounded-md border bg-white px-2 text-xs text-slate-700";
-  const documentPopoverClass = isDarkTheme
-    ? "absolute left-4 top-16 z-40 w-96 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-xl"
-    : "absolute left-4 top-16 z-40 w-96 rounded-xl border bg-white p-3 shadow-xl";
-  const innerPanelCardClass = isDarkTheme
-    ? "rounded border border-slate-600 bg-slate-900 p-2 text-xs text-slate-100"
-    : "rounded border bg-white p-2 text-xs text-slate-700";
-  const rightPanelSectionClass = isDarkTheme
-    ? "rounded-lg border border-slate-700 bg-slate-800 p-3"
-    : "rounded-lg border bg-slate-50 p-3";
-  const rightPanelFieldClass = isDarkTheme
-    ? "mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-    : "mt-1 w-full rounded border bg-white px-2 py-1 text-xs text-slate-700";
-  const rightPanelFieldCompactClass = isDarkTheme
-    ? "mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] text-slate-100"
-    : "mt-1 w-full rounded border bg-white px-2 py-1 text-[11px] text-slate-700";
-  const rightPanelActionButtonClass = isDarkTheme
-    ? "rounded border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 hover:bg-slate-800"
-    : "rounded border bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50";
-  const rightPanelNoteCardClass = isDarkTheme
-    ? "mt-2 rounded border border-slate-600 bg-slate-900 px-2 py-2 text-[10px] text-slate-300"
-    : "mt-2 rounded border bg-white px-2 py-2 text-[10px] text-slate-500";
-  const rightPanelInlineFieldClass = isDarkTheme
-    ? "h-8 flex-1 rounded border border-slate-600 bg-slate-900 px-2 text-xs text-slate-100"
-    : "h-8 flex-1 rounded border bg-white px-2 text-xs text-slate-700";
-  const rightPanelActionButtonSmallClass = isDarkTheme
-    ? "rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800"
-    : "rounded border bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50";
-  const rightPanelCardClass = isDarkTheme
-    ? "mt-2 rounded border border-slate-600 bg-slate-900 p-2"
-    : "mt-2 rounded border bg-white p-2";
+  const workspaceClass =
+    "hero-gradient relative flex h-screen flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]";
+  const headerClass =
+    "glass relative z-[90] flex h-14 items-center justify-between border-b border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_92%,transparent)] px-4 backdrop-blur";
+  const leftPanelClass =
+    "glass absolute left-0 top-0 z-[120] flex h-full flex-col border-r border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_94%,transparent)] shadow-xl transition-transform duration-220 ease-out";
+  const canvasContainerClass =
+    "relative min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,color-mix(in_srgb,var(--bg-tertiary)_70%,transparent)_0%,var(--bg-secondary)_60%)] p-6";
+  const controlButtonClass =
+    "inline-flex items-center gap-1 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_84%,transparent)] px-2 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+  const controlButtonWideClass =
+    "inline-flex items-center gap-1 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_84%,transparent)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+  const documentPopoverClass =
+    "glass absolute left-4 top-16 z-40 w-96 rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_96%,transparent)] p-3 shadow-xl";
+  const rightPanelFieldCompactClass =
+    "mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] text-slate-100";
+  const rightPanelCardClass =
+    "mt-2 rounded-lg border border-slate-600 bg-slate-900 p-2";
+  const rightPanelInlineFieldClass =
+    "h-8 flex-1 rounded-lg border border-slate-600 bg-slate-900 px-2 text-xs text-slate-100";
+  const rightPanelActionButtonSmallClass =
+    "rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800";
   const libraryActionButtonClass = buttonSecondaryTiny;
   const libraryActionButtonDisabledClass = withDisabled(buttonSecondaryTiny);
   const libraryDangerButtonClass = buttonDangerSoftTiny;
   const libraryDangerButtonDisabledClass = withDisabled(buttonDangerSoftTiny);
   const sourcePrimaryActionClass = withDisabled(`w-full ${buttonPrimarySm}`);
-  const libraryEmptyStateClass = isDarkTheme
-    ? "rounded-lg border border-dashed border-slate-600 bg-slate-900 px-2 py-3 text-center text-xs text-slate-400"
-    : emptyStatePanelSm;
+  const libraryEmptyStateClass = "rounded-lg border border-dashed border-slate-600 bg-slate-900 px-2 py-3 text-center text-xs text-slate-400";
   const clearRecentDisabledReason = "No recent template history to clear.";
   const deleteSelectedDisabledReason = "Select at least one custom template first.";
+  const isNarrowViewport = viewportWidth < 1200;
+  const leftWorkbenchWidth = leftWorkbenchMode === "expanded" ? 420 : 320;
+  const headerMenuClass =
+    "absolute right-0 top-10 z-[140] min-w-[180px] rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_97%,transparent)] p-1 shadow-xl";
+  const headerMenuItemClass =
+    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+  const headerMenuItemActiveClass =
+    "flex w-full items-center gap-2 rounded-lg bg-[var(--primary-subtle)] px-2 py-1.5 text-left text-xs font-semibold text-[var(--primary-text)] hover:bg-[color:color-mix(in_srgb,var(--primary)_20%,transparent)]";
+  const floatingIconButtonClass =
+    "pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_94%,transparent)] text-[var(--text-secondary)] shadow-lg backdrop-blur hover:bg-[var(--bg-tertiary)]";
+  const themeToggleButtonClass =
+    "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_90%,transparent)] text-[var(--text-secondary)] shadow hover:bg-[var(--bg-tertiary)]";
+
+  const toggleLeftWorkbench = () => {
+    setLeftWorkbenchMode((current) => {
+      const next = current === "collapsed" ? "compact" : "collapsed";
+      setActiveWorkspaceOverlay(next === "collapsed" ? "none" : "left");
+      return next;
+    });
+  };
+  const toggleLeftWorkbenchSize = () => {
+    setLeftWorkbenchMode((current) => {
+      if (current === "collapsed") {
+        setActiveWorkspaceOverlay("left");
+        return "compact";
+      }
+      return current === "compact" ? "expanded" : "compact";
+    });
+  };
+  const closeWorkspaceOverlays = () => {
+    setLeftWorkbenchMode("collapsed");
+    setActiveWorkspaceOverlay("none");
+    setShowWorkspaceQuickMenu(false);
+  };
 
 
   if (!hasHydrated) {
@@ -2260,114 +2212,273 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           <input
             value={currentDoc.title}
             onChange={(event) => setTitle(event.target.value)}
-            className="w-72 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-semibold outline-none transition focus:border-slate-300 focus:bg-slate-50"
+            className="w-72 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-semibold outline-none transition focus:border-[var(--primary)] focus:bg-[var(--bg-tertiary)]"
           />
-          <span className="text-xs text-slate-400">Auto-saved locally</span>
+          <div className="ml-2 flex items-center gap-1">
+            <div className="relative" ref={fileMenuRef}>
+              <button
+                onClick={() => {
+                  setShowFileMenu((value) => !value);
+                  setShowViewMenu(false);
+                  setShowLabelsMenu(false);
+                  setShowLayoutMenu(false);
+                  setShowAutoLayoutMenu(false);
+                  setShowExportMenu(false);
+                }}
+                className={controlButtonClass}
+              >
+                File
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showFileMenu && (
+                <div className={headerMenuClass}>
+                  <button onClick={() => { router.push("/"); setShowFileMenu(false); }} className={headerMenuItemClass}>Home</button>
+                  <button onClick={() => { setShowDocuments((value) => !value); setShowFileMenu(false); }} className={headerMenuItemClass}>Docs</button>
+                  <button onClick={() => { createNewDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Document</button>
+                  <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
+                    <CopyPlus className="h-3.5 w-3.5" />Save As
+                  </button>
+                  <button onClick={() => { void saveAsTemplate(); setShowFileMenu(false); }} className={headerMenuItemClass}>
+                    <LayoutTemplate className="h-3.5 w-3.5" />Save as Template
+                  </button>
+                  <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>Delete Current</button>
+                </div>
+              )}
+            </div>
+            <div className="relative" ref={viewMenuRef}>
+              <button
+                onClick={() => {
+                  setShowViewMenu((value) => !value);
+                  setShowFileMenu(false);
+                  setShowLabelsMenu(false);
+                  setShowLayoutMenu(false);
+                  setShowAutoLayoutMenu(false);
+                  setShowExportMenu(false);
+                }}
+                className={controlButtonClass}
+              >
+                View
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showViewMenu && (
+                <div className={headerMenuClass}>
+                  <button onClick={() => { undo(); setShowViewMenu(false); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-3.5 w-3.5" />Undo</button>
+                  <button onClick={() => { redo(); setShowViewMenu(false); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-3.5 w-3.5" />Redo</button>
+                  <button onClick={() => { syncFromEditor(); setShowViewMenu(false); }} className={headerMenuItemClass}><Play className="h-3.5 w-3.5" />Sync</button>
+                  <button onClick={() => { setCanvasResetKey((value) => value + 1); setShowViewMenu(false); }} className={headerMenuItemClass}>Fit Canvas</button>
+                  <button onClick={() => { setCanvasResetKey((value) => value + 1); clearSelection(); setTraceMode("none"); setShowViewMenu(false); }} className={headerMenuItemClass}>Reset View</button>
+                  <button onClick={() => { toggleLeftWorkbench(); setShowViewMenu(false); }} className={headerMenuItemClass}>{leftWorkbenchVisible ? "Hide Workbench" : "Show Workbench"}</button>
+                  <button onClick={() => { setShowShortcutHints((value) => !value); }} className={headerMenuItemClass}>{showShortcutHints ? "Hide" : "Show"} Shortcut Hints</button>
+                  <div className="px-2 py-1 text-[11px] text-[var(--text-tertiary)]">Hold Space to Pan</div>
+                </div>
+              )}
+            </div>
+            <div className="relative" ref={labelsMenuRef}>
+              <button
+                onClick={() => {
+                  setShowLabelsMenu((value) => !value);
+                  setShowFileMenu(false);
+                  setShowViewMenu(false);
+                  setShowLayoutMenu(false);
+                  setShowAutoLayoutMenu(false);
+                  setShowExportMenu(false);
+                }}
+                className={controlButtonClass}
+              >
+                Labels
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showLabelsMenu && (
+                <div className={`${headerMenuClass} max-h-[60vh] min-w-[240px] overflow-y-auto`}>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
+                    <input type="checkbox" checked={currentDoc.style.showLabels} onChange={(event) => patchStyle({ showLabels: event.target.checked })} className="mr-2" />
+                    Show Labels
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
+                    Position
+                    <select value={currentDoc.style.labelPosition} onChange={(event) => patchStyle({ labelPosition: event.target.value as "inside" | "outside" })} className={rightPanelFieldCompactClass}>
+                      <option value="outside">Outside</option>
+                      <option value="inside">Inside</option>
+                    </select>
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
+                    Font Size
+                    <input type="range" min={10} max={24} value={currentDoc.style.labelFontSize} onChange={(event) => patchStyle({ labelFontSize: Number(event.target.value) })} className="mt-1 w-full" />
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
+                    Font Family
+                    <select value={currentDoc.style.labelFontFamily} onChange={(event) => patchStyle({ labelFontFamily: event.target.value as "Roboto" | "Google Sans" | "System Sans" })} className={rightPanelFieldCompactClass}>
+                      <option value="Google Sans">Google Sans</option>
+                      <option value="Roboto">Roboto</option>
+                      <option value="System Sans">System Sans</option>
+                    </select>
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
+                    Label Color
+                    <input type="color" value={currentDoc.style.labelColor} onChange={(event) => patchStyle({ labelColor: event.target.value })} className="mt-1 h-8 w-full rounded border border-[var(--border-base)] bg-[var(--bg-elevated)] p-1" />
+                  </label>
+                </div>
+              )}
+            </div>
+            <div className="relative" ref={layoutMenuRef}>
+              <button
+                onClick={() => {
+                  setShowLayoutMenu((value) => !value);
+                  setShowFileMenu(false);
+                  setShowViewMenu(false);
+                  setShowLabelsMenu(false);
+                  setShowAutoLayoutMenu(false);
+                  setShowExportMenu(false);
+                }}
+                className={controlButtonClass}
+              >
+                Layout
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showLayoutMenu && (
+                <div className={`${headerMenuClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Palette
+                    <select value={currentDoc.style.palette} onChange={(event) => patchStyle({ palette: event.target.value as "classic" | "ocean" | "sunset" })} className={rightPanelFieldCompactClass}>
+                      <option value="classic">Classic</option>
+                      <option value="ocean">Ocean</option>
+                      <option value="sunset">Sunset</option>
+                    </select>
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Width
+                    <input type="range" min={8} max={42} value={currentDoc.style.nodeWidth} onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })} className="mt-1 w-full" />
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Padding
+                    <input type="range" min={4} max={50} value={currentDoc.style.nodePadding} onChange={(event) => patchStyle({ nodePadding: Number(event.target.value) })} className="mt-1 w-full" />
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Radius
+                    <input type="range" min={0} max={24} value={currentDoc.style.nodeRadius} onChange={(event) => patchStyle({ nodeRadius: Number(event.target.value) })} className="mt-1 w-full" />
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Link Opacity
+                    <input type="range" min={5} max={100} value={Math.round(currentDoc.style.linkOpacity * 100)} onChange={(event) => patchStyle({ linkOpacity: Number(event.target.value) / 100 })} className="mt-1 w-full" />
+                  </label>
+                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Curvature
+                    <input type="range" min={0.15} max={0.85} step={0.01} value={currentDoc.style.curvature} onChange={(event) => patchStyle({ curvature: Number(event.target.value) })} className="mt-1 w-full" />
+                  </label>
+                  <div className="mt-1 border-t border-[var(--border-base)] p-2">
+                    <p className="mb-1 text-[11px] font-semibold text-[var(--text-secondary)]">Trace</p>
+                    <div className="grid grid-cols-3 gap-1">
+                      <button onClick={() => setTraceMode("none")} className={traceMode === "none" ? headerMenuItemActiveClass : headerMenuItemClass}>None</button>
+                      <button onClick={() => setTraceMode("upstream")} className={traceMode === "upstream" ? headerMenuItemActiveClass : headerMenuItemClass}>Upstream</button>
+                      <button onClick={() => setTraceMode("downstream")} className={traceMode === "downstream" ? headerMenuItemActiveClass : headerMenuItemClass}>Downstream</button>
+                    </div>
+                    <button onClick={clearSelectionWithNotice} className={`mt-2 w-full ${headerMenuItemClass}`}>Clear Selection</button>
+                  </div>
+                  <div className="mt-1 border-t border-[var(--border-base)] p-2">
+                    <p className="mb-1 text-[11px] font-semibold text-[var(--text-secondary)]">Style Presets</p>
+                    <input value={newStylePresetName} onChange={(event) => setNewStylePresetName(event.target.value)} placeholder="Preset name" className={rightPanelInlineFieldClass} />
+                    <button onClick={() => void saveCurrentStylePreset()} className={`mt-1 w-full ${rightPanelActionButtonSmallClass}`}>Save Current</button>
+                    <div className="mt-2 space-y-1">
+                      {allStylePresets.map((preset) => (
+                        <div key={preset.id} className="flex items-center gap-1">
+                          <button onClick={() => applyStylePreset(preset)} className={`${rightPanelActionButtonSmallClass} flex-1 text-left`}>{preset.name}</button>
+                          {!preset.builtIn && (
+                            <button onClick={() => void removeStylePreset(preset.id)} className={headerMenuItemClass}>Delete</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowDocuments((value) => !value)}
-            className={controlButtonClass}
-            title="Documents"
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Docs
-          </button>
-          <button
-            onClick={createNewDocument}
-            className={controlButtonClass}
-            title="New document"
-          >
-            New
-          </button>
-          <button
-            onClick={saveAsCopy}
-            className={controlButtonClass}
-            title="Save as copy"
-          >
-            <CopyPlus className="h-3.5 w-3.5" />
-            Save As
-          </button>
-          <button
-            onClick={() => void saveAsTemplate()}
-            className={controlButtonClass}
-            title="Save as template"
-          >
-            <LayoutTemplate className="h-3.5 w-3.5" />
-            Save Template
-          </button>
-          <button
-            onClick={undo}
-            disabled={historyPast.length === 0}
-            className={controlButtonDisabledClass}
-            title={historyPast.length === 0 ? "No actions to undo." : "Undo (Ctrl/Cmd+Z)"}
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={redo}
-            disabled={historyFuture.length === 0}
-            className={controlButtonDisabledClass}
-            title={historyFuture.length === 0 ? "No actions to redo." : "Redo (Ctrl/Cmd+Y)"}
-          >
-            <Redo2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => syncFromEditor()}
-            className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white"
-          >
-            <Play className="h-3.5 w-3.5" />
-            Sync
-          </button>
-          <div className="inline-flex items-center gap-1">
-            <select
-              value={autoLayoutStrategy}
-              onChange={(event) => setAutoLayoutStrategy(event.target.value as AutoLayoutStrategy)}
-              className={controlSelectClass}
-              title="Auto-layout strategy"
-            >
-              {AUTO_LAYOUT_STRATEGY_OPTIONS.map((item) => (
-                <option key={`layout-strategy-${item.id}`} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+          <div className="text-xs text-[var(--text-tertiary)]">{Math.round(zoomLevel * 100)}%</div>
+          <div className="relative" ref={autoLayoutMenuRef}>
             <button
-              onClick={() => applyAutoLayoutStrategy(autoLayoutStrategy)}
+              onClick={() => {
+                setShowAutoLayoutMenu((value) => !value);
+                setShowFileMenu(false);
+                setShowViewMenu(false);
+                setShowLabelsMenu(false);
+                setShowLayoutMenu(false);
+                setShowExportMenu(false);
+              }}
               className={controlButtonWideClass}
-              title="Apply auto-layout"
+              title="Auto-layout options"
             >
               <WandSparkles className="h-3.5 w-3.5" />
               Auto-layout
+              <ChevronDown className="h-3.5 w-3.5" />
             </button>
+            {showAutoLayoutMenu && (
+              <div className={headerMenuClass}>
+                {AUTO_LAYOUT_STRATEGY_OPTIONS.map((item) => (
+                  <button
+                    key={`layout-menu-${item.id}`}
+                    onClick={() => {
+                      setAutoLayoutStrategy(item.id);
+                      applyAutoLayoutStrategy(item.id);
+                      setShowAutoLayoutMenu(false);
+                    }}
+                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs ${
+                      autoLayoutStrategy === item.id
+                        ? "bg-[var(--primary-subtle)] text-[var(--primary-text)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    {autoLayoutStrategy === item.id && <span>Current</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              onClick={() => {
+                setShowExportMenu((value) => !value);
+                setShowFileMenu(false);
+                setShowViewMenu(false);
+                setShowLabelsMenu(false);
+                setShowLayoutMenu(false);
+                setShowAutoLayoutMenu(false);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-[color:color-mix(in_srgb,var(--primary)_45%,transparent)] bg-gradient-to-r from-[var(--primary)] to-[var(--flow-5)] px-3 py-1.5 text-xs font-semibold text-[var(--text-on-primary)] shadow"
+              title="Export options"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            {showExportMenu && (
+              <div className={`${headerMenuClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
+                <button onClick={() => { runExportSvg(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export SVG</button>
+                <button onClick={() => { void runExportPng(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export PNG</button>
+                <button onClick={() => { runExportHtml(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export HTML</button>
+                <button onClick={() => { void runExportAll(); setShowExportMenu(false); }} className={`mt-1 ${headerMenuItemActiveClass}`}>Export All</button>
+                <div className="mt-2 border-t border-[var(--border-base)] p-2 text-xs text-[var(--text-secondary)]">
+                  <label className="mb-1 block">Width<input type="number" value={exportWidth} onChange={(event) => setExportWidth(Number(event.target.value) || 1200)} className={rightPanelFieldCompactClass} /></label>
+                  <label className="mb-1 block">Height<input type="number" value={exportHeight} onChange={(event) => setExportHeight(Number(event.target.value) || 700)} className={rightPanelFieldCompactClass} /></label>
+                  <label className="mb-1 block">Padding<input type="number" value={exportPadding} onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))} className={rightPanelFieldCompactClass} /></label>
+                  <label className="mb-1 block">PNG Scale<input type="number" min={1} max={4} value={exportPngScale} onChange={(event) => setExportPngScale(Number(event.target.value))} className={rightPanelFieldCompactClass} /></label>
+                  <label className="mb-1 block">File Template<input value={exportFileTemplate} onChange={(event) => setExportFileTemplate(event.target.value)} className={rightPanelFieldCompactClass} /></label>
+                  <label className="mt-1 inline-flex items-center gap-2"><input type="checkbox" checked={exportTransparentBg} onChange={(event) => setExportTransparentBg(event.target.checked)} />Transparent</label>
+                </div>
+              </div>
+            )}
           </div>
           <button
-            onClick={runExportSvg}
-            className={controlButtonWideClass}
+            onClick={() => {
+              const nextTheme = currentDoc.style.theme === "dark" ? "light" : "dark";
+              const currentDefault =
+                currentDoc.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+              const nextDefault = nextTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+              const nextLabelColor =
+                currentDoc.style.labelColor === currentDefault ? nextDefault : currentDoc.style.labelColor;
+              patchStyle({ theme: nextTheme, labelColor: nextLabelColor });
+            }}
+            className={themeToggleButtonClass}
+            title={currentDoc.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-label={currentDoc.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           >
-            <Download className="h-3.5 w-3.5" />
-            SVG
-          </button>
-          <button
-            onClick={() => void runExportPng()}
-            className={controlButtonWideClass}
-          >
-            <Download className="h-3.5 w-3.5" />
-            PNG
-          </button>
-          <button
-            onClick={runExportHtml}
-            className={controlButtonWideClass}
-          >
-            <Download className="h-3.5 w-3.5" />
-            HTML
-          </button>
-          <button
-            onClick={() => void runExportAll()}
-            className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white"
-          >
-            <Download className="h-3.5 w-3.5" />
-            All
+            {currentDoc.style.theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
         </div>
       </header>
@@ -2375,11 +2486,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       {showDocuments && (
         <div className={documentPopoverClass}>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-[11px]">
+            <div className="grid grid-cols-2 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_90%,transparent)] p-1 text-[11px]">
               <button
                 onClick={() => setLibraryTab("documents")}
                 className={`rounded-md px-2 py-1 font-medium ${
-                  libraryTab === "documents" ? "bg-white text-slate-900 shadow" : "text-slate-500"
+                  libraryTab === "documents"
+                    ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
+                    : "text-[var(--text-tertiary)]"
                 }`}
               >
                 Documents
@@ -2387,7 +2500,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <button
                 onClick={() => setLibraryTab("templates")}
                 className={`rounded-md px-2 py-1 font-medium ${
-                  libraryTab === "templates" ? "bg-white text-slate-900 shadow" : "text-slate-500"
+                  libraryTab === "templates"
+                    ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
+                    : "text-[var(--text-tertiary)]"
                 }`}
               >
                 Templates
@@ -2413,17 +2528,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             value={librarySearch}
             onChange={(event) => setLibrarySearch(event.target.value)}
             placeholder={libraryTab === "documents" ? "Search documents" : "Search templates"}
-            className="mb-2 w-full rounded-md border px-2 py-1.5 text-xs outline-none focus:border-blue-300"
+            className="mb-2 w-full rounded-md border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_95%,transparent)] px-2 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--primary)]"
           />
           {libraryTab === "templates" && (
-            <div className="mb-2 space-y-2 rounded-md border bg-slate-50 p-2">
+            <div className="mb-2 space-y-2 rounded-md border border-slate-700 bg-slate-900/70 p-2">
               <div className="flex items-center gap-2">
                 <select
                   value={libraryTemplateSourceMode}
                   onChange={(event) =>
                     setLibraryTemplateSourceMode(event.target.value as "all" | "user" | "builtin")
                   }
-                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
                 >
                   <option value="all">All sources</option>
                   <option value="user">My templates</option>
@@ -2436,7 +2551,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       event.target.value as "all" | "Easy" | "Medium" | "Advanced",
                     )
                   }
-                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
                 >
                   <option value="all">All levels</option>
                   <option value="Easy">Easy</option>
@@ -2446,7 +2561,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 <select
                   value={libraryTemplateTagFilter}
                   onChange={(event) => setLibraryTemplateTagFilter(event.target.value)}
-                  className="h-7 min-w-[110px] rounded border bg-white px-2 text-[11px] text-slate-700"
+                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
                 >
                   {libraryTemplateTagOptions.map((tag) => (
                     <option key={`editor-library-tag-${tag}`} value={tag}>
@@ -2487,7 +2602,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           <div className="max-h-72 space-y-1 overflow-auto pr-1">
             {libraryTab === "documents" ? (
               filteredDocuments.length === 0 ? (
-                <p className={libraryEmptyStateClass}>
+                <p className={`${libraryEmptyStateClass} type-caption`}>
                   No documents found.
                 </p>
               ) : (
@@ -2497,8 +2612,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     onClick={() => openDocumentById(doc.id)}
                     className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${
                       doc.id === currentDoc.id
-                        ? "border-blue-300 bg-blue-50 text-blue-700"
-                        : "hover:border-slate-300 hover:bg-slate-50"
+                        ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
+                        : "border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800"
                     }`}
                   >
                     <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
@@ -2509,7 +2624,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 ))
               )
             ) : sortedFilteredTemplates.length === 0 ? (
-              <p className={libraryEmptyStateClass}>
+              <p className={`${libraryEmptyStateClass} type-caption`}>
                 No templates found.
               </p>
             ) : (
@@ -2523,16 +2638,16 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                         onClick={() => void applyTemplateFromLibrary(template.id)}
                         className="flex-1 text-left"
                       >
-                        <p className="text-xs font-medium text-slate-800">{template.name}</p>
+                        <p className="text-xs font-medium text-slate-100">{template.name}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-1">
-                          <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                          <span className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] font-medium text-slate-300">
                             {template.difficulty}
                           </span>
-                          <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                          <span className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] font-medium text-slate-300">
                             {isUserTemplate ? "My template" : "Built-in"}
                           </span>
                           {isRecentTemplate && (
-                            <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                            <span className="rounded border border-indigo-400/40 bg-indigo-500/18 px-1.5 py-0.5 text-[10px] font-medium text-indigo-100">
                               Recent
                             </span>
                           )}
@@ -2544,7 +2659,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                             {(template.tags ?? []).slice(0, 3).map((tag) => (
                               <span
                                 key={`${template.id}-library-tag-${tag}`}
-                                className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"
+                              className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300"
                               >
                                 #{tag}
                               </span>
@@ -2554,7 +2669,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       </button>
                       {isUserTemplate && (
                         <div className="flex items-center gap-1">
-                          <label className="inline-flex items-center gap-1 rounded border px-1.5 py-1 text-[10px] text-slate-600 hover:bg-slate-50">
+                          <label className="inline-flex items-center gap-1 rounded border border-slate-600 px-1.5 py-1 text-[10px] text-slate-300 hover:bg-slate-800">
                             <input
                               type="checkbox"
                               checked={effectiveSelectedUserTemplateIds.includes(template.id)}
@@ -2573,7 +2688,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           </label>
                           <button
                             onClick={() => void deleteTemplateFromLibrary(template.id)}
-                            className="rounded border px-2 py-1 text-[10px] text-red-600 hover:bg-red-50"
+                            className="rounded border border-rose-400/40 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/15"
                           >
                             Delete
                           </button>
@@ -2587,19 +2702,96 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </div>
         </div>
       )}
-      <div className="flex min-h-0 flex-1">
-        <aside className={leftPanelClass}>
+      <div className="relative min-h-0 flex-1">
+        {activeWorkspaceOverlay !== "none" && (
+          <button
+            type="button"
+            aria-label="Close workspace overlays"
+            onClick={closeWorkspaceOverlays}
+            className="absolute inset-0 z-[110] bg-[color:color-mix(in_srgb,var(--bg-overlay)_38%,transparent)] backdrop-blur-[1px]"
+          />
+        )}
+
+        {isNarrowViewport ? (
+          <div className="pointer-events-none absolute right-2 top-3 z-[121]" ref={workspaceQuickMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowWorkspaceQuickMenu((value) => !value)}
+              className={floatingIconButtonClass}
+              title="Workspace controls"
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
+            {showWorkspaceQuickMenu && (
+              <div className={`pointer-events-auto min-w-[170px] ${headerMenuClass}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleLeftWorkbench();
+                    setShowWorkspaceQuickMenu(false);
+                  }}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                >
+                  <span>{leftWorkbenchVisible ? "Hide Workbench" : "Show Workbench"}</span>
+                  <span>Shift+Tab</span>
+                </button>
+                {leftWorkbenchVisible && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleLeftWorkbenchSize();
+                      setShowWorkspaceQuickMenu(false);
+                    }}
+                    className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                  >
+                    <span>{leftWorkbenchMode === "expanded" ? "Compact Width" : "Expand Width"}</span>
+                    <span>Left</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="pointer-events-none absolute left-1 top-1/2 z-[121] flex -translate-y-1/2 flex-col gap-2">
+              <button
+                type="button"
+                onClick={toggleLeftWorkbench}
+                className={floatingIconButtonClass}
+                title={leftWorkbenchVisible ? "Collapse workbench (Shift+Tab)" : "Open workbench (Shift+Tab)"}
+              >
+                {leftWorkbenchVisible ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </button>
+              {leftWorkbenchVisible && (
+                <button
+                  type="button"
+                  onClick={toggleLeftWorkbenchSize}
+                  className={floatingIconButtonClass}
+                  title="Toggle compact/expanded width"
+                >
+                  <GripVertical className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+          </>
+        )}
+
+        <aside
+          className={`${leftPanelClass} ${leftWorkbenchVisible ? "translate-x-0" : "-translate-x-full"}`}
+          style={{ width: leftWorkbenchWidth }}
+        >
           <div className="p-2">
-            <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-xs">
+            <div className="grid grid-cols-2 rounded-lg border border-slate-700 bg-slate-800/70 p-1 text-xs">
               <button
                 onClick={() => setActiveTab("source")}
-                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "source" ? "bg-white text-slate-900 shadow" : "text-slate-500"}`}
+                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "source" ? "bg-slate-700 text-slate-100 shadow" : "text-slate-400"}`}
               >
                 Source
               </button>
               <button
                 onClick={() => setActiveTab("editor")}
-                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "editor" ? "bg-white text-slate-900 shadow" : "text-slate-500"}`}
+                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "editor" ? "bg-slate-700 text-slate-100 shadow" : "text-slate-400"}`}
               >
                 Editor
               </button>
@@ -2608,30 +2800,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
           {activeTab === "source" ? (
             <div className="space-y-3 overflow-auto p-4">
-              <div className="rounded-lg border bg-white p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Import Flow
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {sourceFlowSteps.map((step) => (
-                    <div
-                      key={step.id}
-                      className={`rounded border px-2 py-2 text-xs ${
-                        step.done
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : step.active
-                            ? "border-blue-200 bg-blue-50 text-blue-700"
-                            : "border-slate-200 bg-white text-slate-500"
-                      }`}
-                    >
-                      <p className="font-medium">{step.title}</p>
-                      <p className="mt-0.5 text-[11px]">{step.hint}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
               <label
-                className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-8 text-center transition ${isDragOver ? "border-blue-500 bg-blue-50/50" : "bg-slate-50 hover:border-blue-400 hover:bg-blue-50/40"}`}
+                className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-8 text-center transition ${isDragOver ? "border-indigo-400 bg-indigo-500/12" : "border-slate-600 bg-slate-900/60 hover:border-indigo-400 hover:bg-indigo-500/10"}`}
                 onDragOver={(event) => {
                   event.preventDefault();
                   setIsDragOver(true);
@@ -2641,28 +2811,28 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               >
                 <FileUp className="h-8 w-8 text-slate-400" />
                 <div>
-                  <p className="text-sm font-medium text-slate-700">Upload CSV / JSON / XLSX</p>
-                  <p className="text-xs text-slate-400">Drop file here or click to select</p>
+                  <p className="type-section text-sm font-medium text-slate-200">Upload CSV / JSON / XLSX</p>
+                  <p className="type-caption text-xs text-slate-400">Drop file here or click to select</p>
                 </div>
                 <input className="hidden" type="file" accept=".csv,.json,.xlsx" onChange={onFileUpload} />
               </label>
 
               {sourceFileName && (
-                <div className="rounded-lg border bg-white p-3 text-xs text-slate-600">
-                  Uploaded: <span className="font-medium text-slate-900">{sourceFileName}</span>
+                <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3 text-xs text-slate-300">
+                  Uploaded: <span className="type-body font-medium text-slate-100">{sourceFileName}</span>
                 </div>
               )}
 
               <IssueCenter issues={sourceIssues} />
 
-              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-white"}`}>
+              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-[var(--bg-elevated)]"}`}>
                 <div className="mb-2 text-xs font-medium text-slate-500">Paste CSV text</div>
                 <textarea
                   value={pastedCsv}
                   onChange={(event) => setPastedCsv(event.target.value)}
                   placeholder="source,target,value&#10;A,B,120&#10;B,C,40"
                   className={`h-28 w-full rounded border px-2 py-1 text-xs font-mono outline-none ${
-                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-white"
+                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-[var(--bg-elevated)]"
                   }`}
                 />
                 <button
@@ -2673,14 +2843,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 </button>
               </div>
 
-              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-white"}`}>
+              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-[var(--bg-elevated)]"}`}>
                 <div className="mb-2 text-xs font-medium text-slate-500">Paste JSON text</div>
                 <textarea
                   value={pastedJson}
                   onChange={(event) => setPastedJson(event.target.value)}
                   placeholder='[{"source":"A","target":"B","value":120}]'
                   className={`h-28 w-full rounded border px-2 py-1 text-xs font-mono outline-none ${
-                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-white"
+                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-[var(--bg-elevated)]"
                   }`}
                 />
                 {pastedJsonResult ? (
@@ -2689,7 +2859,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       Valid JSON: {pastedJsonResult.graph.nodes.length} nodes, {pastedJsonResult.graph.links.length} links
                     </div>
                   ) : (
-                    <div className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-700">
+                    <div className="mt-2 rounded border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] px-2 py-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
                       {pastedJsonResult.issue.message} (Ln {pastedJsonResult.issue.line}, Col {pastedJsonResult.issue.column})
                     </div>
                   )
@@ -2698,7 +2868,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 )}
                 <button
                   onClick={previewPastedJson}
-                  className="mt-2 w-full rounded-md border bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                  className="mt-2 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-200"
                 >
                   Preview Pasted JSON
                 </button>
@@ -2735,7 +2905,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
               {sourcePreview && (
                 <div className="space-y-3">
-                  <div className="rounded-lg border bg-white p-3">
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                     <p className="text-xs font-medium text-slate-600">Import Value Policy</p>
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <button
@@ -2743,12 +2913,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           setValuePolicy("drop");
                           setSourceError("");
                           setSourceNotice("");
-                          setImportFlowAppliedCount(0);
                         }}
                         className={`rounded border px-2 py-1 text-xs ${
                           valuePolicy === "drop"
-                            ? "border-slate-900 bg-slate-900 text-white"
-                            : "bg-white text-slate-600"
+                            ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
+                            : "border-slate-600 bg-slate-900 text-slate-300"
                         }`}
                       >
                         Drop invalid/non-positive
@@ -2758,12 +2927,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                           setValuePolicy("clamp");
                           setSourceError("");
                           setSourceNotice("");
-                          setImportFlowAppliedCount(0);
                         }}
                         className={`rounded border px-2 py-1 text-xs ${
                           valuePolicy === "clamp"
-                            ? "border-slate-900 bg-slate-900 text-white"
-                            : "bg-white text-slate-600"
+                            ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
+                            : "border-slate-600 bg-slate-900 text-slate-300"
                         }`}
                       >
                         Clamp to minimum
@@ -2783,7 +2951,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                             );
                             setSourceError("");
                             setSourceNotice("");
-                            setImportFlowAppliedCount(0);
                           }}
                           className="mt-1 w-full rounded border px-2 py-1 text-xs"
                         />
@@ -2791,14 +2958,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     )}
                   </div>
 
-                  <div className="rounded-lg border bg-white p-3">
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-medium text-slate-600">Mapping Presets</p>
                       <button
                         onClick={() => void saveMappingPreset()}
                         disabled={sourceMappingIssues.length > 0}
                         title={sourceMappingIssues.length > 0 ? sourceMappingIssues[0] : "Save current mapping preset"}
-                        className="rounded border px-2 py-1 text-[11px] text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Save Current Mapping
                       </button>
@@ -2815,13 +2982,13 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                               onClick={() => applyMappingPreset(preset.id)}
                               disabled={!presetCompatibilityById.get(preset.id)?.ok}
                               title={presetCompatibilityById.get(preset.id)?.reason || "Apply preset mapping"}
-                              className="flex-1 rounded border px-2 py-1 text-left text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              className="flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-left text-[11px] text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               {preset.name}
                             </button>
                             <button
                               onClick={() => removeMappingPreset(preset.id)}
-                              className="rounded border px-2 py-1 text-[11px] text-red-600"
+                              className="rounded border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] px-2 py-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]"
                               title="Delete preset mapping"
                             >
                               Delete
@@ -2832,7 +2999,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 rounded-lg border bg-white p-3">
+                  <div className="grid grid-cols-3 gap-2 rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                     <label className="text-xs text-slate-600">
                       Source
                       <select
@@ -2877,10 +3044,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     </label>
                   </div>
 
-                  <div className="rounded-lg border bg-white p-3">
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                     <div className="mb-2 text-xs font-medium text-slate-600">Mapping Health</div>
                     {sourceMappingIssues.length > 0 ? (
-                      <div className="space-y-1 text-[11px] text-red-600">
+                      <div className="space-y-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
                         {sourceMappingIssues.map((issue) => (
                           <p key={issue}>- {issue}</p>
                         ))}
@@ -2902,7 +3069,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     )}
                   </div>
 
-                  <div className="rounded-lg border bg-white p-3">
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                     <div className="mb-2 text-xs font-medium text-slate-600">
                       Preview ({sourcePreview.rows.length} rows)
                     </div>
@@ -2991,7 +3158,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     Apply Mapping to Editor ({sourcePreviewMode.toUpperCase()})
                   </button>
                   {!canApplyMapping && (
-                    <p className="text-[11px] text-red-600">
+                    <p className="text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
                       {sourceMappingIssues[0] || "No valid rows to import with current mapping/policy."}
                     </p>
                   )}
@@ -3000,7 +3167,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             </div>
           ) : (
             <div className="min-h-0 flex-1 border-t">
-              <div className="flex h-9 items-center justify-between border-b bg-slate-50 px-3 text-xs text-slate-500">
+              <div className="flex h-9 items-center justify-between border-b border-slate-700 bg-slate-900/75 px-3 text-xs text-slate-400">
                 <span>{fileHint}</span>
                 <label className="inline-flex cursor-pointer items-center gap-2">
                   <input
@@ -3027,60 +3194,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         </aside>
 
         <main className={canvasContainerClass}>
-          <div className="mb-2 flex items-center justify-between rounded-lg border bg-white/85 px-2 py-1 text-xs">
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  setInteractionMode("select");
-                  setCanvasResetKey((value) => value + 1);
-                }}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 ${
-                  interactionMode === "select" ? "bg-slate-900 text-white" : "text-slate-600"
-                }`}
-              >
-                <MousePointer2 className="h-3.5 w-3.5" />
-                Select
-              </button>
-              <button
-                onClick={() => {
-                  setInteractionMode("pan");
-                  setCanvasResetKey((value) => value + 1);
-                }}
-                className={`inline-flex items-center gap-1 rounded px-2 py-1 ${
-                  interactionMode === "pan" ? "bg-slate-900 text-white" : "text-slate-600"
-                }`}
-              >
-                <Hand className="h-3.5 w-3.5" />
-                Pan
-              </button>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  setCanvasResetKey((value) => value + 1);
-                }}
-                className="inline-flex items-center gap-1 rounded border px-2 py-1 text-slate-600"
-              >
-                <LocateFixed className="h-3.5 w-3.5" />
-                Fit
-              </button>
-              <button
-                onClick={() => {
-                  setCanvasResetKey((value) => value + 1);
-                  setInteractionMode("select");
-                  clearSelection();
-                  setTraceMode("none");
-                }}
-                className="inline-flex items-center gap-1 rounded border px-2 py-1 text-slate-600"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset
-              </button>
-              <span className="rounded border bg-slate-50 px-2 py-1 font-medium text-slate-600">
-                {Math.round(zoomLevel * 100)}%
-              </span>
-            </div>
-          </div>
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -3095,7 +3208,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               nodeStyles={currentDoc.nodeStyles}
               linkStyles={currentDoc.linkStyles}
               renderHints={renderHints}
-              interactionMode={interactionMode}
+              interactionMode="select"
+              isSpacePanning={isSpacePanning}
               selectedNodeIds={selectedNodeIds}
               selectedLinkIndex={selectedLinkIndex}
               traceMode={traceMode}
@@ -3108,804 +3222,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </motion.div>
         </main>
 
-        <aside className={rightPanelClass}>
-          <div className={`grid grid-cols-4 gap-1 rounded-lg border p-1 text-[11px] ${
-            isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-slate-50"
-          }`}>
-            <button
-              onClick={() => setRightPanelTab("inspect")}
-              className={`rounded px-2 py-1 font-medium ${
-                rightPanelTab === "inspect"
-                  ? "bg-slate-900 text-white"
-                  : isDarkTheme
-                    ? "text-slate-300 hover:bg-slate-700"
-                    : "text-slate-600 hover:bg-white"
-              }`}
-            >
-              Inspect
-            </button>
-            <button
-              onClick={() => setRightPanelTab("style")}
-              className={`rounded px-2 py-1 font-medium ${
-                rightPanelTab === "style"
-                  ? "bg-slate-900 text-white"
-                  : isDarkTheme
-                    ? "text-slate-300 hover:bg-slate-700"
-                    : "text-slate-600 hover:bg-white"
-              }`}
-            >
-              Style
-            </button>
-            <button
-              onClick={() => setRightPanelTab("export")}
-              className={`rounded px-2 py-1 font-medium ${
-                rightPanelTab === "export"
-                  ? "bg-slate-900 text-white"
-                  : isDarkTheme
-                    ? "text-slate-300 hover:bg-slate-700"
-                    : "text-slate-600 hover:bg-white"
-              }`}
-            >
-              Export
-            </button>
-            <button
-              onClick={() => setRightPanelTab("studio")}
-              className={`rounded px-2 py-1 font-medium ${
-                rightPanelTab === "studio"
-                  ? "bg-slate-900 text-white"
-                  : isDarkTheme
-                    ? "text-slate-300 hover:bg-slate-700"
-                    : "text-slate-600 hover:bg-white"
-              }`}
-            >
-              Studio
-            </button>
-          </div>
-          <IssueCenter issues={canvasActionIssues} />
-          {rightPanelTab === "studio" && (
-            <>
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Studio Settings</p>
-            <label className="mt-2 block text-xs text-slate-600">
-              Default Theme
-              <select
-                value={appPreferences.defaultTheme}
-                onChange={(event) =>
-                  setAppPreferences((prev) => ({
-                    ...prev,
-                    defaultTheme: event.target.value as "light" | "dark",
-                  }))
-                }
-                className={rightPanelFieldClass}
-              >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Default Performance
-              <select
-                value={appPreferences.defaultPerformanceMode}
-                onChange={(event) =>
-                  setAppPreferences((prev) => ({
-                    ...prev,
-                    defaultPerformanceMode: event.target.value as PerformanceMode,
-                  }))
-                }
-                className={rightPanelFieldClass}
-              >
-                <option value="auto">Auto</option>
-                <option value="quality">Quality</option>
-                <option value="balanced">Balanced</option>
-                <option value="performance">Performance</option>
-              </select>
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Default Export Name Template
-              <input
-                value={appPreferences.defaultExportFileTemplate}
-                onChange={(event) =>
-                  setAppPreferences((prev) => ({
-                    ...prev,
-                    defaultExportFileTemplate: event.target.value || "{title}-{date}",
-                  }))
-                }
-                className={rightPanelFieldClass}
-              />
-            </label>
-            <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={appPreferences.defaultExportTransparentBg}
-                onChange={(event) =>
-                  setAppPreferences((prev) => ({
-                    ...prev,
-                    defaultExportTransparentBg: event.target.checked,
-                  }))
-                }
-              />
-              Default export transparent background
-            </label>
-            <button
-              onClick={() => {
-                patchStyle({ theme: appPreferences.defaultTheme });
-                setPerformanceMode(appPreferences.defaultPerformanceMode);
-              }}
-              className="mt-2 w-full rounded border bg-white px-2 py-1 text-xs font-medium text-slate-700"
-            >
-              Apply Defaults to Current Document
-            </button>
-          </div>
-
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Performance</p>
-            <label className="mt-2 block text-xs text-slate-600">
-              Mode
-              <select
-                value={performanceMode}
-                onChange={(event) => setPerformanceMode(event.target.value as PerformanceMode)}
-                className={rightPanelFieldClass}
-              >
-                <option value="auto">Auto</option>
-                <option value="quality">Quality</option>
-                <option value="balanced">Balanced</option>
-                <option value="performance">Performance</option>
-              </select>
-            </label>
-            <p className="mt-2 text-[11px] text-slate-500">
-              Graph: {graphMetrics.nodes} nodes, {graphMetrics.links} links
-            </p>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Tier: {performanceProfile.tier} | Effective: {effectivePerformanceMode}
-            </p>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Recommended: {performanceProfile.recommendedMode}
-            </p>
-            <div className="mt-2 grid grid-cols-2 gap-1">
-              <button
-                onClick={applyRecommendedPerformanceMode}
-                disabled={performanceMode === performanceProfile.recommendedMode}
-                className="rounded border bg-white px-2 py-1 text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                title={performanceMode === performanceProfile.recommendedMode ? "Already using recommended mode." : "Switch to recommended performance mode"}
-              >
-                Use Recommended
-              </button>
-              <button
-                onClick={switchToAutoPerformanceMode}
-                disabled={performanceMode === "auto"}
-                className="rounded border bg-white px-2 py-1 text-[11px] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                title={performanceMode === "auto" ? "Already in auto mode." : "Switch back to auto mode"}
-              >
-                Back to Auto
-              </button>
-            </div>
-            <div className={`mt-2 rounded border px-2 py-1 text-[11px] ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}>
-              <p>Hints: labels {renderHints.showLabels ? "on" : "off"}, hover {renderHints.enableLinkHover ? "on" : "off"}</p>
-              <p>Drag throttle: {renderHints.dragThrottleMs}ms, low-detail {renderHints.lowDetailDuringDrag ? "on" : "off"}</p>
-            </div>
-            <IssueCenter issues={performanceIssues} className="mt-2" />
-          </div>
-            </>
-          )}
-
-          {rightPanelTab === "inspect" && (
-            <>
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Inspector</p>
-            {selectedLink ? (
-              <div className={`mt-2 ${innerPanelCardClass}`}>
-                <p className="font-medium text-slate-900">Link</p>
-                <p className="mt-1">
-                  {selectedLink.source} -&gt; {selectedLink.target}
-                </p>
-                <p className="text-slate-500">Value: {selectedLink.value}</p>
-                <div className="mt-2">
-                  <label className="text-[11px] text-slate-600">Link Color Override</label>
-                  <input
-                    type="color"
-                    value={selectedLinkStyle?.color ?? "#3b82f6"}
-                    onChange={(event) => patchSelectedLinkStyle({ color: event.target.value })}
-                    className={`mt-1 h-8 w-full rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}
-                  />
-                </div>
-                <label className="mt-2 block text-[11px] text-slate-600">
-                  Link Opacity:{" "}
-                  {Math.round(
-                    (selectedLinkStyle?.opacity ?? currentDoc.style.linkOpacity) * 100,
-                  )}
-                  %
-                  <input
-                    type="range"
-                    min={5}
-                    max={100}
-                    value={Math.round(
-                      (selectedLinkStyle?.opacity ?? currentDoc.style.linkOpacity) * 100,
-                    )}
-                    onChange={(event) =>
-                      patchSelectedLinkStyle({ opacity: Number(event.target.value) / 100 })
-                    }
-                    className="mt-1 w-full"
-                  />
-                </label>
-                <label className="mt-2 block text-[11px] text-slate-600">
-                  Link Width: {selectedLinkWidthScale.toFixed(2)}x
-                  <input
-                    type="range"
-                    min={0.5}
-                    max={2.5}
-                    step={0.05}
-                    value={selectedLinkWidthScale}
-                    onChange={(event) =>
-                      patchSelectedLinkStyle({ widthScale: Number(event.target.value) })
-                    }
-                    className="mt-1 w-full"
-                  />
-                </label>
-                <button
-                  onClick={clearSelectedLinkStyle}
-                  className="mt-2 w-full rounded border px-2 py-1 text-[11px] text-slate-600"
-                >
-                  Reset Link Style
-                </button>
-                <button
-                  onClick={() => setSelectedLinkIndex(null)}
-                  className="mt-2 w-full rounded border px-2 py-1 text-[11px] text-slate-600"
-                >
-                  Clear Link Selection
-                </button>
-              </div>
-            ) : selectedNodeIds.length > 0 ? (
-              <div className={`mt-2 ${innerPanelCardClass}`}>
-                <p className="font-medium text-slate-900">
-                  {selectedNodeIds.length === 1 ? "Node" : "Nodes"} ({selectedNodeIds.length})
-                </p>
-                {singleSelectedNodeId ? (
-                  <p className="mt-1 text-slate-600">{singleSelectedNodeId}</p>
-                ) : (
-                  <p className="mt-1 text-slate-500">Batch selection</p>
-                )}
-                {selectedNodeSummary && (
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                    <div className="rounded border bg-slate-50 px-2 py-1">
-                      In: {selectedNodeSummary.inValue.toLocaleString()}
-                    </div>
-                    <div className="rounded border bg-slate-50 px-2 py-1">
-                      Out: {selectedNodeSummary.outValue.toLocaleString()}
-                    </div>
-                  </div>
-                )}
-                {singleSelectedNodeId && (
-                  <div className="mt-2">
-                    <label className="text-[11px] text-slate-600">Node Color Override</label>
-                    <div className="mt-1 flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={singleSelectedNodeColor || "#3b82f6"}
-                        onChange={(event) => {
-                          setSelectionColor(event.target.value);
-                          applyNodeColorToSelection(event.target.value);
-                        }}
-                        className="h-8 w-10 rounded border bg-white p-1"
-                      />
-                      <button
-                        onClick={clearNodeColorFromSelection}
-                        className="flex-1 rounded border px-2 py-1 text-[11px] text-slate-600"
-                      >
-                        Remove Color Override
-                      </button>
-                    </div>
-                    <label className="mt-2 block text-[11px] text-slate-600">
-                      Node Opacity: {singleSelectedNodeOpacity}%
-                      <input
-                        type="range"
-                        min={10}
-                        max={100}
-                        value={singleSelectedNodeOpacity}
-                        onChange={(event) =>
-                          applyNodeOpacityToSelection(Number(event.target.value) / 100)
-                        }
-                        className="mt-1 w-full"
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="mt-2 text-xs text-slate-500">Select a node or link on canvas.</p>
-            )}
-          </div>
-
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Selection</p>
-            <p className="mt-2 text-xs text-slate-600">
-              Selected nodes: {selectedNodeIds.length}{selectedLinkIndex != null ? ", 1 link" : ""}
-            </p>
-            <div className="mt-2 grid grid-cols-3 gap-1">
-              <button
-                onClick={() => setTraceMode("none")}
-                className={`rounded border px-2 py-1 text-[11px] ${
-                  traceMode === "none" ? "border-slate-900 bg-slate-900 text-white" : "bg-white text-slate-600"
-                }`}
-              >
-                None
-              </button>
-              <button
-                onClick={() => setTraceMode("upstream")}
-                disabled={selectedNodeIds.length === 0}
-                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Show upstream trace"}
-                className={`rounded border px-2 py-1 text-[11px] ${
-                  traceMode === "upstream"
-                    ? "border-slate-900 bg-slate-900 text-white"
-                    : "bg-white text-slate-600"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-              >
-                Upstream
-              </button>
-              <button
-                onClick={() => setTraceMode("downstream")}
-                disabled={selectedNodeIds.length === 0}
-                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Show downstream trace"}
-                className={`rounded border px-2 py-1 text-[11px] ${
-                  traceMode === "downstream"
-                    ? "border-slate-900 bg-slate-900 text-white"
-                    : "bg-white text-slate-600"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-              >
-                Downstream
-              </button>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                type="color"
-                value={selectionColor}
-                onChange={(event) => setSelectionColor(event.target.value)}
-                className="h-8 w-10 rounded border bg-white p-1"
-              />
-              <button
-                onClick={applySelectionColorWithNotice}
-                disabled={selectedNodeIds.length === 0}
-                title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Apply selected color to all selected nodes"}
-                className={`flex-1 rounded border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white text-slate-700"}`}
-              >
-                Apply Color to Selection
-              </button>
-            </div>
-            <label className="mt-2 block text-xs text-slate-600">
-              Node Opacity (Batch): {batchSelectionOpacityValue}%
-              <input
-                type="range"
-                min={10}
-                max={100}
-                value={batchSelectionOpacityValue}
-                onChange={(event) => setSelectionOpacity(Number(event.target.value))}
-                className="mt-1 w-full"
-              />
-            </label>
-            <button
-              onClick={applySelectionOpacityWithNotice}
-              disabled={selectedNodeIds.length === 0}
-              title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Apply selected opacity to all selected nodes"}
-              className={`mt-2 w-full rounded border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "bg-white text-slate-700"}`}
-            >
-              Apply Opacity to Selection
-            </button>
-            <button
-              onClick={resetSelectedNodeStylesWithNotice}
-              disabled={selectedNodeIds.length === 0}
-              title={selectedNodeIds.length === 0 ? "Select at least one node first." : "Reset selected node style overrides"}
-              className={`mt-2 w-full rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}
-            >
-              Reset Selected Node Styles
-            </button>
-            <button
-              onClick={clearSelectionWithNotice}
-              disabled={selectedNodeIds.length === 0 && selectedLinkIndex == null}
-              title={selectedNodeIds.length === 0 && selectedLinkIndex == null ? "Select a node or link first." : "Clear current selection"}
-              className={`mt-2 w-full rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-200" : "bg-white text-slate-600"}`}
-            >
-              Clear Selection
-            </button>
-            <div className={rightPanelNoteCardClass}>
-              <div className="flex items-center justify-between gap-2">
-                <span>Shift+click multi-select. Drag blank area for box-select.</span>
-                <button
-                  onClick={() => setShowShortcutHints((value) => !value)}
-                  className={`rounded border px-2 py-0.5 text-[10px] font-medium ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-300" : "text-slate-600"}`}
-                >
-                  {showShortcutHints ? "Hide" : "Show"} shortcuts
-                </button>
-              </div>
-              {showShortcutHints && (
-                <div className={`mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] ${isDarkTheme ? "text-slate-300" : "text-slate-600"}`}>
-                  <span>Ctrl/Cmd+A</span><span>Select all nodes</span>
-                  <span>Ctrl/Cmd+Shift+L</span><span>Apply auto-layout</span>
-                  <span>Ctrl/Cmd+1 / 2</span><span>Switch Source / Editor</span>
-                  <span>Delete / Backspace</span><span>Clear selected styles</span>
-                  <span>Shift+?</span><span>Toggle this hint panel</span>
-                  <span>Esc</span><span>Clear current selection</span>
-                </div>
-              )}
-            </div>
-          </div>
-            </>
-          )}
-
-          {rightPanelTab === "style" && (
-            <>
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Style Presets</p>
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                value={newStylePresetName}
-                onChange={(event) => setNewStylePresetName(event.target.value)}
-                placeholder="Preset name"
-                className={rightPanelInlineFieldClass}
-              />
-              <button
-                onClick={() => void saveCurrentStylePreset()}
-                className={`h-8 ${rightPanelActionButtonSmallClass}`}
-              >
-                Save Current
-              </button>
-            </div>
-            <div className="mt-2 space-y-1">
-              {allStylePresets.map((preset) => (
-                <div key={preset.id} className="flex items-center gap-1">
-                  <button
-                    onClick={() => applyStylePreset(preset)}
-                    className={`${rightPanelActionButtonClass} flex-1 text-left`}
-                  >
-                    {preset.name}
-                    {preset.builtIn ? " (Built-in)" : ""}
-                  </button>
-                  {!preset.builtIn && (
-                    <button
-                      onClick={() => void removeStylePreset(preset.id)}
-                      className={`rounded border px-2 py-1 text-[10px] ${isDarkTheme ? "border-red-500/60 text-red-300 hover:bg-red-500/10" : "text-red-600 hover:bg-red-50"}`}
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Appearance</p>
-            <label className="mt-2 block text-xs text-slate-600">
-              Theme
-              <select
-                value={currentDoc.style.theme}
-                onChange={(event) =>
-                  patchStyle({ theme: event.target.value as "light" | "dark" })
-                }
-                className={rightPanelFieldClass}
-              >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Palette
-              <select
-                value={currentDoc.style.palette}
-                onChange={(event) =>
-                  patchStyle({
-                    palette: event.target.value as "classic" | "ocean" | "sunset",
-                  })
-                }
-                className={rightPanelFieldClass}
-              >
-                <option value="classic">Classic</option>
-                <option value="ocean">Ocean</option>
-                <option value="sunset">Sunset</option>
-              </select>
-            </label>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Node</p>
-            <label className="mt-2 block text-xs text-slate-600">
-              Width: {currentDoc.style.nodeWidth}
-              <input
-                type="range"
-                min={8}
-                max={40}
-                value={currentDoc.style.nodeWidth}
-                onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })}
-                className="mt-1 w-full"
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Padding: {currentDoc.style.nodePadding}
-              <input
-                type="range"
-                min={4}
-                max={40}
-                value={currentDoc.style.nodePadding}
-                onChange={(event) => patchStyle({ nodePadding: Number(event.target.value) })}
-                className="mt-1 w-full"
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Radius: {currentDoc.style.nodeRadius}
-              <input
-                type="range"
-                min={0}
-                max={14}
-                value={currentDoc.style.nodeRadius}
-                onChange={(event) => patchStyle({ nodeRadius: Number(event.target.value) })}
-                className="mt-1 w-full"
-              />
-            </label>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Link</p>
-            <label className="mt-2 block text-xs text-slate-600">
-              Opacity: {Math.round(currentDoc.style.linkOpacity * 100)}%
-              <input
-                type="range"
-                min={10}
-                max={100}
-                value={currentDoc.style.linkOpacity * 100}
-                onChange={(event) => patchStyle({ linkOpacity: Number(event.target.value) / 100 })}
-                className="mt-1 w-full"
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Curvature: {currentDoc.style.curvature.toFixed(2)}
-              <input
-                type="range"
-                min={0.2}
-                max={0.8}
-                step={0.05}
-                value={currentDoc.style.curvature}
-                onChange={(event) => patchStyle({ curvature: Number(event.target.value) })}
-                className="mt-1 w-full"
-              />
-            </label>
-          </div>
-
-          <label className="inline-flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              checked={currentDoc.style.showLabels}
-              onChange={(event) => patchStyle({ showLabels: event.target.checked })}
-            />
-            Show labels
-          </label>
-          <label className="block text-xs text-slate-600">
-            Label Font Size: {currentDoc.style.labelFontSize}px
-            <input
-              type="range"
-              min={9}
-              max={18}
-              value={currentDoc.style.labelFontSize}
-              onChange={(event) => patchStyle({ labelFontSize: Number(event.target.value) })}
-              className="mt-1 w-full"
-            />
-          </label>
-          <label className="block text-xs text-slate-600">
-            Label Font
-            <select
-              value={currentDoc.style.labelFontFamily}
-              onChange={(event) =>
-                patchStyle({
-                  labelFontFamily: event.target.value as
-                    | "Roboto"
-                    | "Google Sans"
-                    | "System Sans",
-                })
-              }
-              className={rightPanelFieldClass}
-            >
-              <option value="Roboto">Roboto</option>
-              <option value="Google Sans">Google Sans</option>
-              <option value="System Sans">System Sans</option>
-            </select>
-          </label>
-          <label className="block text-xs text-slate-600">
-            Label Color
-            <input
-              type="color"
-              value={currentDoc.style.labelColor}
-              onChange={(event) => patchStyle({ labelColor: event.target.value })}
-              className={`mt-1 h-8 w-full rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}
-            />
-          </label>
-          <label className="block text-xs text-slate-600">
-            Label Position
-            <select
-              value={currentDoc.style.labelPosition}
-              onChange={(event) =>
-                patchStyle({ labelPosition: event.target.value as "inside" | "outside" })
-              }
-              className={rightPanelFieldClass}
-            >
-              <option value="outside">Outside</option>
-              <option value="inside">Inside</option>
-            </select>
-          </label>
-
-            </>
-          )}
-          {rightPanelTab === "export" && (
-          <div className={rightPanelSectionClass}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Export Settings</p>
-            <IssueCenter issues={exportIssues} className="mt-2" />
-            {exportPreviewUrl && (
-              <div className={`mt-2 overflow-hidden rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900" : "bg-white"}`}>
-                <NextImage
-                  src={exportPreviewUrl}
-                  alt="Export preview"
-                  width={240}
-                  height={96}
-                  unoptimized
-                  className="h-24 w-full rounded object-contain"
-                />
-              </div>
-            )}
-            <div className="mt-2 space-y-1">
-              {allExportPresets.map((preset) => {
-                const builtIn = DEFAULT_EXPORT_PRESETS.some((item) => item.id === preset.id);
-                return (
-                  <div key={preset.id} className="flex items-center gap-1">
-                    <button
-                      onClick={() => applyExportPreset(preset)}
-                      className={`${rightPanelActionButtonClass} flex-1 text-left text-[10px]`}
-                    >
-                      {preset.name} ({preset.width}x{preset.height}, p{preset.padding ?? 0}, {preset.pngScale ?? 1}x)
-                    </button>
-                    {!builtIn && (
-                      <button
-                        onClick={() => removeCustomPreset(preset.id)}
-                        className={`rounded border p-1 ${isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-300 hover:text-red-400" : "bg-white text-slate-500 hover:text-red-600"}`}
-                        title="Delete preset"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-2 flex items-center gap-1">
-              <input
-                value={newPresetName}
-                onChange={(event) => setNewPresetName(event.target.value)}
-                placeholder="New preset name"
-                className={`${rightPanelFieldCompactClass} mt-0 flex-1`}
-              />
-              <button
-                onClick={saveCurrentAsPreset}
-                className={rightPanelActionButtonClass}
-              >
-                Save
-              </button>
-            </div>
-            <label className="mt-2 block text-xs text-slate-600">
-              Width
-              <input
-                type="number"
-                min={400}
-                max={6000}
-                value={exportWidth}
-                onChange={(event) => setExportWidth(Number(event.target.value) || 1200)}
-                className={rightPanelFieldClass}
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Height
-              <input
-                type="number"
-                min={300}
-                max={6000}
-                value={exportHeight}
-                onChange={(event) => setExportHeight(Number(event.target.value) || 700)}
-                className={rightPanelFieldClass}
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              Padding
-              <input
-                type="number"
-                min={0}
-                max={300}
-                value={exportPadding}
-                onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))}
-                className={rightPanelFieldClass}
-              />
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              PNG Scale
-              <select
-                value={exportPngScale}
-                onChange={(event) => setExportPngScale(Number(event.target.value))}
-                className={rightPanelFieldClass}
-              >
-                <option value={1}>1x</option>
-                <option value={2}>2x</option>
-                <option value={3}>3x</option>
-                <option value={4}>4x</option>
-              </select>
-            </label>
-            <label className="mt-2 block text-xs text-slate-600">
-              File Name Template
-              <input
-                value={exportFileTemplate}
-                onChange={(event) => setExportFileTemplate(event.target.value)}
-                className={rightPanelFieldClass}
-                placeholder="{title}-{date}"
-              />
-              <span className="mt-1 block text-[10px] text-slate-400">
-                Use {"{title}"} and {"{date}"}
-              </span>
-            </label>
-            <div className={rightPanelCardClass}>
-              <p className="text-[11px] font-medium text-slate-600">Export All Options</p>
-              <div className="mt-1 grid grid-cols-3 gap-1 text-[11px] text-slate-600">
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={exportAllFormats.svg}
-                    onChange={(event) =>
-                      setExportAllFormats((prev) => ({ ...prev, svg: event.target.checked }))
-                    }
-                  />
-                  SVG
-                </label>
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={exportAllFormats.png}
-                    onChange={(event) =>
-                      setExportAllFormats((prev) => ({ ...prev, png: event.target.checked }))
-                    }
-                  />
-                  PNG
-                </label>
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={exportAllFormats.html}
-                    onChange={(event) =>
-                      setExportAllFormats((prev) => ({ ...prev, html: event.target.checked }))
-                    }
-                  />
-                  HTML
-                </label>
-              </div>
-              <label className="mt-2 block text-[11px] text-slate-600">
-                Naming
-                <select
-                  value={exportAllNamingMode}
-                  onChange={(event) => setExportAllNamingMode(event.target.value as "same" | "suffix")}
-                  className={rightPanelFieldCompactClass}
-                >
-                  <option value="suffix">Append format suffix</option>
-                  <option value="same">Use same base name</option>
-                </select>
-              </label>
-            </div>
-            <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={exportTransparentBg}
-                onChange={(event) => setExportTransparentBg(event.target.checked)}
-              />
-              Transparent background (PNG/HTML/SVG)
-            </label>
-          </div>
-          )}
-        </aside>
+        
       {dialogNode}
 
       </div>
     </div>
   );
 }
+
+
 
 
 

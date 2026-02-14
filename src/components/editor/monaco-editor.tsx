@@ -52,24 +52,40 @@ function ensureEditorLanguageAndTheme(monaco: typeof import("monaco-editor")) {
       base: "vs-dark",
       inherit: true,
       rules: [
-        { token: "delimiter", foreground: "64748b" },
-        { token: "number", foreground: "22d3ee" },
-        { token: "string", foreground: "fbbf24" },
-        { token: "identifier", foreground: "cbd5e1" },
+        { token: "delimiter", foreground: "94a3b8" },
+        { token: "number", foreground: "67e8f9" },
+        { token: "string", foreground: "f472b6" },
+        { token: "identifier", foreground: "e2e8f0" },
       ],
-      colors: {},
+      colors: {
+        "editor.background": "#0f172a",
+        "editor.foreground": "#e2e8f0",
+        "editor.lineHighlightBackground": "#1e293b99",
+        "editorCursor.foreground": "#f1f5f9",
+        "editor.selectionBackground": "#38bdf84d",
+        "editor.inactiveSelectionBackground": "#33415588",
+        "editorLineNumber.foreground": "#64748b",
+        "editorLineNumber.activeForeground": "#cbd5e1",
+      },
     });
 
     monaco.editor.defineTheme(STREAMING_LIGHT_THEME_ID, {
       base: "vs",
       inherit: true,
       rules: [
-        { token: "delimiter", foreground: "475569" },
-        { token: "number", foreground: "0891b2" },
-        { token: "string", foreground: "b45309" },
-        { token: "identifier", foreground: "334155" },
+        { token: "delimiter", foreground: "64748b" },
+        { token: "number", foreground: "0e7490" },
+        { token: "string", foreground: "db2777" },
+        { token: "identifier", foreground: "0f172a" },
       ],
-      colors: {},
+      colors: {
+        "editor.background": "#ffffff",
+        "editor.lineHighlightBackground": "#e2e8f088",
+        "editorCursor.foreground": "#0f172a",
+        "editor.selectionBackground": "#7dd3fc66",
+        "editorLineNumber.foreground": "#94a3b8",
+        "editorLineNumber.activeForeground": "#475569",
+      },
     });
 
     streamingThemeReady = true;
@@ -125,9 +141,12 @@ export function SankeyMonacoEditor({ value, format, theme, onChange, marker }: P
       options={{
         minimap: { enabled: false },
         fontSize: 13,
+        fontFamily: "var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         wordWrap: "on",
         smoothScrolling: true,
         tabSize: 2,
+        cursorSmoothCaretAnimation: "on",
+        padding: { top: 10, bottom: 10 },
       }}
     />
   );

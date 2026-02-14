@@ -8,10 +8,16 @@ type Props = {
 };
 
 function tone(level: AppIssue["level"]) {
-  if (level === "error") return "border-red-200 bg-red-50 text-red-700";
-  if (level === "warning") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (level === "success") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  return "border-slate-200 bg-slate-50 text-slate-700";
+  if (level === "error") {
+    return "border-[color:color-mix(in_srgb,var(--error)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] text-[color:color-mix(in_srgb,var(--error)_78%,white)]";
+  }
+  if (level === "warning") {
+    return "border-[color:color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--warning)_14%,transparent)] text-[color:color-mix(in_srgb,var(--warning)_78%,white)]";
+  }
+  if (level === "success") {
+    return "border-[color:color-mix(in_srgb,var(--success)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--success)_14%,transparent)] text-[color:color-mix(in_srgb,var(--success)_78%,white)]";
+  }
+  return "border-[color:color-mix(in_srgb,var(--border-base)_75%,transparent)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_75%,transparent)] text-[var(--text-secondary)]";
 }
 
 export function IssueCenter({ issues, className }: Props) {

@@ -1,15 +1,21 @@
 import type { Metadata } from "next";
-import { Roboto, Roboto_Mono } from "next/font/google";
+import { Inter, Outfit, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const roboto = Roboto({
-  variable: "--font-roboto",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
-  weight: ["300", "400", "500", "700"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const robotoMono = Roboto_Mono({
-  variable: "--font-roboto-mono",
+const outfit = Outfit({
+  variable: "--font-outfit",
+  subsets: ["latin"],
+  weight: ["500", "600", "700", "800"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
 });
 
@@ -24,8 +30,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${roboto.variable} ${robotoMono.variable} antialiased`}>
+    <html lang="en" data-theme="dark">
+      <body
+        className={`${inter.variable} ${outfit.variable} ${jetbrainsMono.variable} style-demo-theme antialiased`}
+      >
         {children}
       </body>
     </html>

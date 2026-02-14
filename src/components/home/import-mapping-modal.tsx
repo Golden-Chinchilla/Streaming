@@ -74,27 +74,29 @@ export function ImportMappingModal({
   onClose,
   onConfirm,
 }: Props) {
-  const fieldClass = "mt-1 w-full rounded border bg-white px-2 py-1 text-xs";
-  const compactFieldClass = "min-w-[220px] flex-1 rounded border bg-white px-2 py-1 text-xs";
+  const fieldClass =
+    "mt-1 w-full rounded border border-[var(--border-base)] bg-[var(--bg-elevated)] px-2 py-1 text-xs text-[var(--text-primary)]";
+  const compactFieldClass =
+    "min-w-[220px] flex-1 rounded border border-[var(--border-base)] bg-[var(--bg-elevated)] px-2 py-1 text-xs text-[var(--text-primary)]";
   const neutralButtonClass = buttonSecondarySm;
   const neutralButtonSoftClass = withDisabled(buttonSecondarySm, "50");
   const dangerButtonSoftClass = withDisabled(buttonDangerSoftSm, "50");
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/45 p-4">
-      <div className="w-full max-w-2xl rounded-xl border bg-white p-4 shadow-xl">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[color:color-mix(in_srgb,var(--bg-overlay)_72%,transparent)] p-4">
+      <div className="w-full max-w-2xl rounded-xl border border-[var(--border-base)] bg-[var(--bg-elevated)] p-4 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-slate-900">Confirm import mapping</p>
-            <p className="text-xs text-slate-500">{fileName}</p>
+            <p className="text-sm font-semibold text-[var(--text-primary)]">Confirm import mapping</p>
+            <p className="text-xs text-[var(--text-tertiary)]">{fileName}</p>
           </div>
           <button type="button" onClick={onClose} className={neutralButtonClass}>
             Cancel
           </button>
         </div>
 
-        <div className="mt-3 rounded border bg-slate-50 p-3">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Mapping presets</p>
+        <div className="mt-3 rounded border border-[var(--border-base)] bg-[var(--bg-secondary)] p-3">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Mapping presets</p>
           <div className="mt-2 flex items-center gap-2">
             <input
               value={presetSearch}
@@ -163,17 +165,17 @@ export function ImportMappingModal({
             </button>
           </div>
           {presetSearch.trim().length > 0 && presets.length === 0 && (
-            <p className="mt-2 text-[11px] text-slate-500">No presets match current search.</p>
+            <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">No presets match current search.</p>
           )}
           {selectedPresetId && !selectedPresetCompatible && (
-            <p className="mt-2 text-[11px] text-amber-700">
+            <p className="mt-2 text-[11px] text-[color:color-mix(in_srgb,var(--warning)_75%,white)]">
               This preset does not match current headers and cannot be applied.
             </p>
           )}
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="text-xs text-slate-600">
+          <label className="text-xs text-[var(--text-secondary)]">
             Source column
             <select
               value={pendingMapping.source}
@@ -187,7 +189,7 @@ export function ImportMappingModal({
               ))}
             </select>
           </label>
-          <label className="text-xs text-slate-600">
+          <label className="text-xs text-[var(--text-secondary)]">
             Target column
             <select
               value={pendingMapping.target}
@@ -201,7 +203,7 @@ export function ImportMappingModal({
               ))}
             </select>
           </label>
-          <label className="text-xs text-slate-600">
+          <label className="text-xs text-[var(--text-secondary)]">
             Value column
             <select
               value={pendingMapping.value}
@@ -218,7 +220,7 @@ export function ImportMappingModal({
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className="text-xs text-slate-600">
+          <label className="text-xs text-[var(--text-secondary)]">
             Invalid value handling
             <select
               value={pendingValuePolicy}
@@ -229,7 +231,7 @@ export function ImportMappingModal({
               <option value="clamp">Clamp invalid to min</option>
             </select>
           </label>
-          <label className="text-xs text-slate-600">
+          <label className="text-xs text-[var(--text-secondary)]">
             Min value when clamped
             <input
               type="number"
@@ -243,7 +245,7 @@ export function ImportMappingModal({
         </div>
 
         {pendingPreviewStats && (
-          <div className="mt-3 rounded border bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <div className="mt-3 rounded border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
             Rows: total {pendingPreviewStats.totalRows}, output {pendingPreviewStats.outputRows}, dropped {pendingPreviewStats.droppedRows}, clamped {pendingPreviewStats.clampedRows}
           </div>
         )}

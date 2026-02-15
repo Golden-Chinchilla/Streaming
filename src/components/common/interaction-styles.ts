@@ -3,30 +3,34 @@ import { cn } from "@/lib/utils";
 export const disabledState40 = "disabled:cursor-not-allowed disabled:opacity-40";
 export const disabledState50 = "disabled:cursor-not-allowed disabled:opacity-50";
 
+// M3: Filled Button (Primary)
 export const buttonPrimarySm =
-  "rounded-lg border border-[color:color-mix(in_srgb,var(--primary)_45%,transparent)] bg-gradient-to-r from-[var(--primary)] to-[var(--flow-3)] px-3 py-1.5 text-xs font-semibold text-[var(--text-on-primary)] shadow transition hover:from-[var(--primary-hover)] hover:to-[var(--flow-6)]";
+  "rounded-full bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--text-on-primary)] shadow-sm transition hover:bg-[var(--primary-hover)] hover:shadow active:bg-[var(--primary-active)]";
 export const buttonPrimaryMd =
-  "rounded-xl border border-[color:color-mix(in_srgb,var(--primary)_45%,transparent)] bg-gradient-to-r from-[var(--primary)] to-[var(--flow-3)] px-4 py-2 text-sm font-semibold text-[var(--text-on-primary)] shadow transition hover:from-[var(--primary-hover)] hover:to-[var(--flow-6)]";
+  "rounded-full bg-[var(--primary)] px-6 py-2.5 text-sm font-medium text-[var(--text-on-primary)] shadow-sm transition hover:bg-[var(--primary-hover)] hover:shadow-md active:bg-[var(--primary-active)]";
 
+// M3: Tonal Button (Secondary/Filled Tonal) -> Mapping to Secondary here
 export const buttonSecondarySm =
-  "rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_88%,transparent)] px-2 py-1 text-xs text-[var(--text-secondary)] transition hover:bg-[var(--bg-tertiary)]";
+  "rounded-full bg-[var(--bg-tertiary)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] transition hover:bg-[color:color-mix(in_srgb,var(--text-secondary)_8%,var(--bg-tertiary))] active:bg-[color:color-mix(in_srgb,var(--text-secondary)_12%,var(--bg-tertiary))]";
 export const buttonSecondaryMd =
-  "rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_88%,transparent)] px-3 py-2 text-sm text-[var(--text-secondary)] transition hover:bg-[var(--bg-tertiary)]";
+  "rounded-full bg-[var(--bg-tertiary)] px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[color:color-mix(in_srgb,var(--text-secondary)_8%,var(--bg-tertiary))] active:bg-[color:color-mix(in_srgb,var(--text-secondary)_12%,var(--bg-tertiary))]";
 export const buttonSecondaryTiny =
-  "rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_88%,transparent)] px-2 py-1 text-[11px] text-[var(--text-secondary)] transition hover:bg-[var(--bg-tertiary)]";
+  "rounded-full bg-[var(--bg-tertiary)] px-3 py-1 text-[11px] font-medium text-[var(--text-secondary)] transition hover:bg-[color:color-mix(in_srgb,var(--text-secondary)_8%,var(--bg-tertiary))]";
 
+// M3: Error/Danger (using Error container logic)
 export const buttonDangerSm =
-  "rounded-lg border border-[color:color-mix(in_srgb,var(--error)_55%,transparent)] bg-[var(--error)] px-3 py-1.5 text-sm font-medium text-[var(--text-on-primary)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_82%,white)]";
+  "rounded-full bg-[var(--error)] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:shadow hover:bg-[color:color-mix(in_srgb,white_10%,var(--error))]";
 export const buttonDangerSoftSm =
-  "rounded-lg border border-[color:color-mix(in_srgb,var(--error)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] px-2 py-1 text-xs text-[color:color-mix(in_srgb,var(--error)_75%,white)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_22%,transparent)]";
+  "rounded-full bg-[color:color-mix(in_srgb,var(--error)_10%,transparent)] px-4 py-2 text-xs font-medium text-[var(--error)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_15%,transparent)]";
 export const buttonDangerSoftTiny =
-  "rounded-lg border border-[color:color-mix(in_srgb,var(--error)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] px-2 py-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_75%,white)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_22%,transparent)]";
+  "rounded-full bg-[color:color-mix(in_srgb,var(--error)_10%,transparent)] px-3 py-1 text-[11px] font-medium text-[var(--error)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_15%,transparent)]";
 
 export const emptyStatePanelLg =
-  "rounded-2xl border border-dashed border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_82%,transparent)] p-8 text-center";
+  "rounded-[28px] border border-dashed border-[var(--border-base)] bg-[var(--bg-secondary)] p-8 text-center";
 export const emptyStatePanelSm =
-  "rounded-lg border border-dashed border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_82%,transparent)] px-2 py-3 text-center text-xs text-[var(--text-tertiary)]";
+  "rounded-[16px] border border-dashed border-[var(--border-base)] bg-[var(--bg-secondary)] px-4 py-4 text-center text-xs text-[var(--text-tertiary)]";
 
 export function withDisabled(className: string, strength: "40" | "50" = "40") {
   return cn(className, strength === "40" ? disabledState40 : disabledState50);
 }
+

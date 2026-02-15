@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, ChevronDown, ChevronUp, Moon, Plus, Search, Sun, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   clearRecentTemplateIds,
   deleteDocumentById,
@@ -341,108 +342,131 @@ export function TemplateGallery() {
     });
   };
 
-  const galleryCardClass = "glass rounded-2xl px-4 py-3 shadow-sm transition hover:border-indigo-300/50";
-  const filterSelectClass = "rounded-lg border border-slate-600/70 bg-slate-900/70 px-3 py-2 text-sm text-slate-200";
+  // M3 Card Styles
+  const galleryCardClass = "group relative overflow-hidden rounded-[24px] border border-[var(--border-light)] bg-[var(--bg-elevated)] px-5 py-4 shadow-[var(--shadow-sm)] transition-all duration-300 hover:shadow-[var(--shadow-lg)] hover:-translate-y-1 hover:border-[var(--primary)]";
+
+  // M3 Input/Select Styles
+  const filterSelectClass = "rounded-full border border-[var(--border-base)] bg-[var(--bg-secondary)] px-4 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-all";
+
   const tinyNeutralButtonClass = buttonSecondaryTiny;
-  const dangerBulkButtonClass = withDisabled("rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300 transition hover:bg-rose-500/20");
+  // M3 Error Container for Delete
+  const dangerBulkButtonClass = withDisabled("rounded-full border border-[color:color-mix(in_srgb,var(--error)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_10%,transparent)] px-4 py-2 text-sm font-medium text-[var(--error)] transition hover:bg-[color:color-mix(in_srgb,var(--error)_15%,transparent)]");
   const deleteSelectedDisabledReason = "Select at least one custom template to enable bulk delete.";
 
   return (
     <div className="hero-gradient min-h-screen bg-background">
       <header className="sticky top-0 z-20 border-b border-slate-700/60 bg-slate-950/55 backdrop-blur">
-        <div className="mx-auto flex h-16 w-full max-w-[1500px] items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <div className="animate-pulse-glow flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-pink-500 text-sm font-bold text-white">
+        <div className="mx-auto flex h-20 w-full max-w-[1600px] items-center justify-between px-8">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-[16px] bg-[var(--primary)] text-base font-bold text-[var(--text-on-primary)] shadow-md">
               ST
             </div>
             <div>
-              <p className="font-display type-section text-sm font-semibold text-slate-100">Streaming</p>
-              <p className="type-caption text-xs text-slate-500">Professional Diagram Editor</p>
+              <p className="font-display type-section text-lg font-medium text-[var(--text-primary)]">Streaming</p>
+              <p className="type-caption text-xs text-[var(--text-tertiary)]">Visual Studio</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void toggleHomeTheme()}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_90%,transparent)] text-[var(--text-secondary)] shadow hover:bg-[var(--bg-tertiary)]"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] shadow-sm transition hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               title={homeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               aria-label={homeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
             >
-              {homeTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {homeTheme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1500px] px-6 py-8">
-        <section className="mb-12 grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <div className="glass rounded-3xl border border-indigo-400/20 p-8 xl:col-span-7">
-            <h1 className="type-hero max-w-2xl text-4xl font-semibold text-slate-100">
-              Start your Sankey.
-            </h1>
-            <p className="type-body mt-4 max-w-xl text-sm text-slate-300">
-              From blank or from data.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Link
-                href="/editor"
-                className={`inline-flex items-center gap-2 ${buttonPrimaryMd}`}
-              >
-                New Diagram
-                <Plus className="h-4 w-4" />
-              </Link>
+      <main className="mx-auto w-full max-w-[1600px] px-8 py-10">
+        <section className="mb-14 grid grid-cols-1 gap-8 xl:grid-cols-12">
+          {/* Hero Card */}
+          <div className="relative overflow-hidden rounded-[32px] bg-[var(--primary)] p-10 text-[var(--text-on-primary)] shadow-[var(--shadow-flow)] xl:col-span-7">
+            <div className="relative z-10">
+              <h1 className="type-hero max-w-2xl text-5xl font-medium tracking-tight">
+                Start your Sankey.
+              </h1>
+              <p className="type-body mt-4 max-w-xl text-lg opacity-90">
+                Create beautiful flow diagrams from blank canvas or import your data instantly.
+              </p>
+              <div className="mt-10 flex flex-wrap items-center gap-4">
+                <Link
+                  href="/editor"
+                  className="rounded-full bg-white px-8 py-3.5 text-sm font-bold text-[var(--primary)] shadow-md transition hover:bg-opacity-90 hover:shadow-lg active:scale-95"
+                >
+                  <span className="flex items-center gap-2">
+                    New Diagram
+                    <Plus className="h-5 w-5" />
+                  </span>
+                </Link>
+              </div>
             </div>
+            {/* Abstract Decorative Circles */}
+            <div className="absolute -right-20 -top-20 h-96 w-96 rounded-full bg-white opacity-10 blur-3xl" />
+            <div className="absolute -bottom-20 -left-20 h-80 w-80 rounded-full bg-white opacity-10 blur-3xl" />
           </div>
 
-          <div className="glass rounded-3xl border border-slate-700/70 p-5 xl:col-span-5">
-            <div className="mb-4">
-              <h2 className="type-section text-lg font-semibold text-slate-100">Recent</h2>
+          {/* Recent Documents Panel */}
+          <div className="rounded-[32px] border border-[var(--border-light)] bg-[var(--bg-elevated)] p-6 shadow-sm xl:col-span-5">
+            <div className="mb-6 flex items-center justify-between px-2">
+              <h2 className="type-section text-xl font-medium text-[var(--text-primary)]">Recent</h2>
             </div>
             {recentDocs.length === 0 ? (
               <div className={emptyStatePanelLg}>
-                <p className="type-caption text-sm text-slate-400">No recent documents yet.</p>
+                <p className="type-caption text-sm text-[var(--text-tertiary)]">No recent documents yet.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                {recentDocs.slice(0, 4).map((doc) => (
-                  <div key={doc.id} className="group relative">
-                    <Link
-                      href={`/editor?doc=${encodeURIComponent(doc.id)}`}
-                      className={`block w-full ${galleryCardClass} pr-11`}
+                <AnimatePresence mode="popLayout">
+                  {recentDocs.slice(0, 4).map((doc, index) => (
+                    <motion.div
+                      key={doc.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ duration: 0.2, delay: index * 0.05 }}
+                      className="group relative"
                     >
-                      <p className="type-body text-sm font-semibold text-slate-100">{doc.title || "Untitled Diagram"}</p>
-                      <p className="type-caption mt-1 text-xs text-slate-400">
-                        {formatRelativeTime(doc.updatedAt)} • {doc.format.toUpperCase()}
-                      </p>
-                    </Link>
-                    <button
-                      type="button"
-                      aria-label={`Delete ${doc.title || "Untitled Diagram"}`}
-                      title="Delete"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void deleteRecentDocument(doc);
-                      }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md border border-[color:color-mix(in_srgb,var(--error)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_10%,transparent)] p-1.5 text-[color:color-mix(in_srgb,var(--error)_78%,white)] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
+                      <Link
+                        href={`/editor?doc=${encodeURIComponent(doc.id)}`}
+                        className={`block w-full ${galleryCardClass} pr-12`}
+                      >
+                        <p className="type-body text-base font-medium text-[var(--text-primary)]">{doc.title || "Untitled Diagram"}</p>
+                        <p className="type-caption mt-1 text-xs text-[var(--text-secondary)]">
+                          {formatRelativeTime(doc.updatedAt)} • {doc.format.toUpperCase()}
+                        </p>
+                      </Link>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${doc.title || "Untitled Diagram"}`}
+                        title="Delete"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void deleteRecentDocument(doc);
+                        }}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full p-2 text-[var(--text-tertiary)] opacity-0 transition hover:bg-[var(--bg-tertiary)] hover:text-[var(--error)] group-hover:opacity-100 focus:opacity-100"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               </div>
             )}
           </div>
         </section>
 
-        <section className="glass rounded-3xl border border-indigo-400/20 p-5 md:p-6">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <section className="rounded-[32px] border border-[var(--border-light)] bg-[var(--bg-elevated)] p-8">
+          <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="type-section text-xl font-semibold text-slate-100">
+              <h2 className="type-section text-2xl font-medium text-[var(--text-primary)]">
                 Templates
               </h2>
-              <p className="type-caption mt-1 text-sm text-slate-400">
-                Find one and start.
+              <p className="type-caption mt-2 text-base text-[var(--text-secondary)]">
+                Jump start your visualization.
               </p>
             </div>
             <button
@@ -498,13 +522,13 @@ export function TemplateGallery() {
 
           <div className="mb-4">
             <div className="flex flex-wrap items-center gap-3">
-              <div className="relative min-w-[240px] flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <div className="relative min-w-[280px] flex-1">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--text-tertiary)]" />
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search"
-                  className="w-full rounded-lg border border-slate-600/70 bg-slate-900/70 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-indigo-400"
+                  placeholder="Search templates..."
+                  className="w-full rounded-full border border-[var(--border-base)] bg-[var(--bg-secondary)] py-2.5 pl-11 pr-4 text-sm text-[var(--text-primary)] outline-none transition focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]"
                 />
               </div>
               <select
@@ -575,11 +599,10 @@ export function TemplateGallery() {
               <button
                 key={item}
                 onClick={() => setCategory(item)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  category === item
-                    ? "border border-indigo-400/50 bg-indigo-500/20 text-indigo-100"
-                    : "border border-slate-600 bg-slate-900/70 text-slate-300 hover:bg-slate-800"
-                }`}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${category === item
+                  ? "bg-[var(--primary-subtle)] text-[var(--primary-text)] ring-1 ring-[var(--primary)]"
+                  : "border border-[var(--border-base)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                  }`}
               >
                 {item}
               </button>
@@ -594,11 +617,11 @@ export function TemplateGallery() {
             )}
           </div>
 
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="type-section text-lg font-semibold text-slate-100">
-              Featured <span className="gradient-text">Templates</span>
+          <div className="mb-6 flex items-center justify-between">
+            <h2 className="type-section text-xl font-medium text-[var(--text-primary)]">
+              Featured <span className="text-[var(--primary)]">Templates</span>
             </h2>
-            <p className="type-caption text-sm text-slate-400">{filteredTemplates.length} templates</p>
+            <p className="type-caption text-sm text-[var(--text-tertiary)]">{filteredTemplates.length} templates</p>
           </div>
 
           {filteredTemplates.length === 0 ? (
@@ -615,80 +638,93 @@ export function TemplateGallery() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredTemplates.map((template) => {
-                const isUser = template.id.startsWith("user-");
-                const selected = effectiveSelectedUserTemplateIds.includes(template.id);
-                const isRecent = recentTemplateIds.includes(template.id);
-                return (
-                  <Link
-                    key={template.id}
-                    href={`/editor?template=${encodeURIComponent(template.id)}`}
-                    className="group glass overflow-hidden rounded-2xl shadow-sm transition duration-300 hover:-translate-y-1 hover:border-indigo-300/50 hover:shadow-lg"
-                  >
-                    <div className={`relative h-44 bg-gradient-to-br ${template.accent} p-5 text-white`}>
-                      {isRecent && (
-                        <span className="rounded-md border border-indigo-300/35 bg-indigo-500/25 px-2 py-1 text-[10px] font-semibold uppercase">
-                          Recent
-                        </span>
-                      )}
-                      <div className="absolute bottom-4 left-5 right-5">
-                        <p className="type-caption text-sm opacity-85">{template.category}</p>
-                        <h3 className="type-hero text-xl font-semibold">{template.name}</h3>
-                      </div>
-                    </div>
-                    <div className="p-4">
-                      <p className="type-caption mt-2 text-[11px] text-slate-400">Category: {template.category}</p>
-                      <p className="type-caption mt-1 text-xs text-slate-400">Difficulty: {template.difficulty}</p>
-                      <p className="type-caption mt-2 text-xs text-slate-500">
-                        {isUser ? "My template" : "Built-in"}
-                      </p>
-                      <div className="mt-2 inline-flex items-center text-indigo-300">
-                        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
-                      </div>
-                      {isUser && (
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
-                            onChange={() => {
-                              setSelectedUserTemplateIds((prev) => {
-                                if (prev.includes(template.id)) {
-                                  return prev.filter((id) => id !== template.id);
-                                }
-                                return [...prev, template.id];
-                              });
-                            }}
-                          />
-                          <button
-                            onClick={(event) => {
-                              event.preventDefault();
-                              void editUserTemplate(template);
-                            }}
-                            className={tinyNeutralButtonClass}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={(event) => {
-                              event.preventDefault();
-                              void removeUserTemplate(template.id);
-                            }}
-                            className={buttonDangerSoftTiny}
-                          >
-                            Delete
-                          </button>
+            <motion.div
+              layout
+              className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3"
+            >
+              <AnimatePresence mode="popLayout">
+                {filteredTemplates.map((template, index) => {
+                  const isUser = template.id.startsWith("user-");
+                  const selected = effectiveSelectedUserTemplateIds.includes(template.id);
+                  const isRecent = recentTemplateIds.includes(template.id);
+                  return (
+                    <motion.div
+                      layout
+                      key={template.id}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      transition={{ duration: 0.2, delay: index * 0.03 }}
+                    >
+                      <Link
+                        href={`/editor?template=${encodeURIComponent(template.id)}`}
+                        className="group relative block overflow-hidden rounded-[24px] border border-[var(--border-light)] bg-[var(--bg-secondary)] shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg"
+                      >
+                        <div className={`relative h-48 bg-gradient-to-br ${template.accent} p-6 text-white`}>
+                          {isRecent && (
+                            <span className="absolute right-4 top-4 rounded-full bg-white/20 px-3 py-1 text-[10px] font-bold uppercase backdrop-blur-md">
+                              Recent
+                            </span>
+                          )}
+                          <div className="absolute bottom-6 left-6 right-6">
+                            <p className="type-caption text-sm font-medium opacity-90">{template.category}</p>
+                            <h3 className="type-hero mt-1 text-2xl font-bold">{template.name}</h3>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
+                        <div className="p-4">
+                          <p className="type-caption mt-2 text-xs text-[var(--text-tertiary)]">Category: {template.category}</p>
+                          <p className="type-caption mt-1 text-xs text-[var(--text-tertiary)]">Difficulty: {template.difficulty}</p>
+                          <p className="type-caption mt-2 text-xs text-[var(--text-secondary)]">
+                            {isUser ? "My template" : "Built-in"}
+                          </p>
+                          <div className="mt-3 inline-flex items-center text-[var(--primary)] font-medium">
+                            <ArrowRight className="h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" />
+                          </div>
+                          {isUser && (
+                            <div className="mt-2 flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }}
+                                onChange={() => {
+                                  setSelectedUserTemplateIds((prev) => {
+                                    if (prev.includes(template.id)) {
+                                      return prev.filter((id) => id !== template.id);
+                                    }
+                                    return [...prev, template.id];
+                                  });
+                                }}
+                              />
+                              <button
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  void editUserTemplate(template);
+                                }}
+                                className={tinyNeutralButtonClass}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  void removeUserTemplate(template.id);
+                                }}
+                                className={buttonDangerSoftTiny}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </Link>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            </motion.div>
           )}
         </section>
       </main>

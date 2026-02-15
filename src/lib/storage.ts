@@ -1,18 +1,16 @@
 "use client";
 
-import { openDB } from "idb";
-import { AppPreferences, SankeyDocument, TemplateSummary } from "@/lib/types";
+import { openDB, IDBPDatabase } from "idb";
+import { AppPreferences, BaseDocument, Folder } from "@/lib/types";
 
 const DB_NAME = "streaming-editor-db";
+const DB_VERSION = 2;
 const STORE_NAME = "app";
-const CURRENT_DOC_KEY = "current-document";
 const CURRENT_DOC_ID_KEY = "current-document-id";
 const DOCUMENTS_KEY = "documents";
-const RECENT_DOCS_KEY = "recent-documents";
-const RECENT_TEMPLATE_IDS_KEY = "recent-template-ids";
-const USER_TEMPLATES_KEY = "user-templates";
+const FOLDERS_KEY = "folders";
 const APP_PREFERENCES_KEY = "app-preferences";
-const RECENT_LIMIT = 8;
+
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultTheme: "light",
   defaultPerformanceMode: "auto",
@@ -20,156 +18,232 @@ const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultExportFileTemplate: "{title}-{date}",
 };
 
-async function getDb() {
-  return openDB(DB_NAME, 1, {
-    upgrade(db) {
+/* ------------------------------------------------------------------ */
+/*  Database initialisation & migration                               */
+/* ------------------------------------------------------------------ */
+
+async function getDb(): Promise<IDBPDatabase> {
+  return openDB(DB_NAME, DB_VERSION, {
+    upgrade(db, oldVersion, _newVersion, tx) {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+
+      if (oldVersion < 2) {
+        // Migrate v1 SankeyDocuments → v2 BaseDocuments
+        const store = tx.objectStore(STORE_NAME);
+        migrateV1ToV2(store);
       }
     },
   });
 }
 
-export async function saveCurrentDocument(document: SankeyDocument) {
-  const db = await getDb();
-  await db.put(STORE_NAME, document, CURRENT_DOC_KEY);
-  await db.put(STORE_NAME, document.id, CURRENT_DOC_ID_KEY);
-}
+/**
+ * Migrates legacy SankeyDocument[] stored under "documents" to BaseDocument[].
+ * Also migrates the legacy "current-document" single-doc key.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function migrateV1ToV2(store: any) {
+  try {
+    // Migrate documents array
+    const legacyDocs = (await store.get(DOCUMENTS_KEY)) as unknown[] | undefined;
+    if (Array.isArray(legacyDocs) && legacyDocs.length > 0) {
+      const migrated = legacyDocs.map(migrateSankeyDocToBase);
+      await store.put(migrated, DOCUMENTS_KEY);
+    }
 
-export async function loadCurrentDocument() {
-  const db = await getDb();
-  const currentId = (await db.get(STORE_NAME, CURRENT_DOC_ID_KEY)) as string | undefined;
-  if (currentId) {
-    const documents = await loadAllDocuments();
-    const hit = documents.find((item) => item.id === currentId);
-    if (hit) return hit;
+    // Migrate single current-document
+    const legacyCurrent = await store.get("current-document");
+    if (legacyCurrent && typeof legacyCurrent === "object" && "id" in legacyCurrent) {
+      // We no longer store a separate current-document blob, just the ID
+      await store.put((legacyCurrent as { id: string }).id, CURRENT_DOC_ID_KEY);
+      await store.delete("current-document");
+    }
+
+    // Clean up removed keys
+    await store.delete("recent-documents");
+    await store.delete("recent-template-ids");
+    await store.delete("user-templates");
+
+    // Initialise empty folders if not present
+    const existingFolders = await store.get(FOLDERS_KEY);
+    if (!existingFolders) {
+      await store.put([], FOLDERS_KEY);
+    }
+  } catch (err) {
+    console.error("[storage] v1→v2 migration error:", err);
   }
-  return (await db.get(STORE_NAME, CURRENT_DOC_KEY)) as SankeyDocument | undefined;
 }
 
-export async function saveRecentDocument(document: SankeyDocument) {
+/**
+ * Converts a legacy SankeyDocument (v1) into a BaseDocument (v2).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function migrateSankeyDocToBase(legacy: any): BaseDocument {
+  return {
+    id: legacy.id ?? crypto.randomUUID(),
+    title: legacy.title ?? "Untitled",
+    diagramType: "sankey",
+    folderId: null,
+    createdAt: legacy.updatedAt ?? Date.now(),
+    updatedAt: legacy.updatedAt ?? Date.now(),
+    data: {
+      format: legacy.format ?? "json",
+      editorText: legacy.editorText ?? "",
+      style: legacy.style ?? {},
+      nodePositions: legacy.nodePositions ?? {},
+      nodeStyles: legacy.nodeStyles ?? {},
+      linkStyles: legacy.linkStyles ?? {},
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Document CRUD                                                     */
+/* ------------------------------------------------------------------ */
+
+export async function loadAllDocuments(): Promise<BaseDocument[]> {
   const db = await getDb();
-  const existing = ((await db.get(STORE_NAME, RECENT_DOCS_KEY)) as SankeyDocument[] | undefined) ?? [];
-  const deduped = existing.filter((item) => item.id !== document.id);
-  const next = [document, ...deduped].slice(0, RECENT_LIMIT);
-  await db.put(STORE_NAME, next, RECENT_DOCS_KEY);
+  const docs =
+    ((await db.get(STORE_NAME, DOCUMENTS_KEY)) as BaseDocument[] | undefined) ?? [];
+  return docs.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export async function loadRecentDocuments() {
-  const db = await getDb();
-  return (((await db.get(STORE_NAME, RECENT_DOCS_KEY)) as SankeyDocument[] | undefined) ?? []).sort(
-    (a, b) => b.updatedAt - a.updatedAt,
-  );
-}
-
-export async function saveRecentTemplate(templateId: string) {
-  const db = await getDb();
-  const existing = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
-  const deduped = existing.filter((item) => item !== templateId);
-  const next = [templateId, ...deduped].slice(0, RECENT_LIMIT);
-  await db.put(STORE_NAME, next, RECENT_TEMPLATE_IDS_KEY);
-}
-
-export async function loadRecentTemplateIds() {
-  const db = await getDb();
-  return ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
-}
-
-export async function clearRecentTemplateIds() {
-  const db = await getDb();
-  await db.put(STORE_NAME, [], RECENT_TEMPLATE_IDS_KEY);
-}
-
-export async function deleteUserTemplates(templateIds: string[]) {
-  const idSet = new Set(templateIds);
-  const db = await getDb();
-  const templates = await loadUserTemplates();
-  const next = templates.filter((item) => !idSet.has(item.id));
-  await db.put(STORE_NAME, next, USER_TEMPLATES_KEY);
-
-  const recentTemplateIds = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
-  const nextRecentTemplateIds = recentTemplateIds.filter((id) => !idSet.has(id));
-  await db.put(STORE_NAME, nextRecentTemplateIds, RECENT_TEMPLATE_IDS_KEY);
-}
-export async function loadAllDocuments() {
-  const db = await getDb();
-  const docs = ((await db.get(STORE_NAME, DOCUMENTS_KEY)) as SankeyDocument[] | undefined) ?? [];
-  if (docs.length > 0) {
-    return docs.sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-  const legacyCurrent = (await db.get(STORE_NAME, CURRENT_DOC_KEY)) as SankeyDocument | undefined;
-  if (!legacyCurrent) return [];
-  await db.put(STORE_NAME, [legacyCurrent], DOCUMENTS_KEY);
-  await db.put(STORE_NAME, legacyCurrent.id, CURRENT_DOC_ID_KEY);
-  return [legacyCurrent];
-}
-
-export async function loadDocumentById(docId: string) {
+export async function loadDocumentById(
+  docId: string,
+): Promise<BaseDocument | undefined> {
   const docs = await loadAllDocuments();
-  return docs.find((item) => item.id === docId);
+  return docs.find((d) => d.id === docId);
 }
 
-export async function upsertDocument(document: SankeyDocument) {
+export async function loadDocumentsByFolder(
+  folderId: string | null,
+): Promise<BaseDocument[]> {
+  const docs = await loadAllDocuments();
+  return docs.filter((d) => d.folderId === folderId);
+}
+
+export async function upsertDocument(document: BaseDocument): Promise<void> {
   const db = await getDb();
   const docs = await loadAllDocuments();
-  const next = [document, ...docs.filter((item) => item.id !== document.id)].sort(
+  const next = [document, ...docs.filter((d) => d.id !== document.id)].sort(
     (a, b) => b.updatedAt - a.updatedAt,
   );
   await db.put(STORE_NAME, next, DOCUMENTS_KEY);
 }
 
-export async function setCurrentDocumentId(docId: string) {
+export async function deleteDocumentById(docId: string): Promise<void> {
+  const db = await getDb();
+  const docs = await loadAllDocuments();
+  const next = docs.filter((d) => d.id !== docId);
+  await db.put(STORE_NAME, next, DOCUMENTS_KEY);
+
+  // If this was the current document, switch to the next available
+  const currentId = (await db.get(STORE_NAME, CURRENT_DOC_ID_KEY)) as
+    | string
+    | undefined;
+  if (currentId === docId) {
+    await db.put(STORE_NAME, next[0]?.id ?? null, CURRENT_DOC_ID_KEY);
+  }
+}
+
+export async function moveDocument(
+  docId: string,
+  folderId: string | null,
+): Promise<void> {
+  const doc = await loadDocumentById(docId);
+  if (!doc) return;
+  await upsertDocument({ ...doc, folderId, updatedAt: Date.now() });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Current document pointer                                          */
+/* ------------------------------------------------------------------ */
+
+export async function setCurrentDocumentId(docId: string): Promise<void> {
   const db = await getDb();
   await db.put(STORE_NAME, docId, CURRENT_DOC_ID_KEY);
 }
 
-export async function deleteDocumentById(docId: string) {
+export async function loadCurrentDocument(): Promise<BaseDocument | undefined> {
   const db = await getDb();
-  const docs = await loadAllDocuments();
-  const next = docs.filter((item) => item.id !== docId);
-  await db.put(STORE_NAME, next, DOCUMENTS_KEY);
+  const currentId = (await db.get(STORE_NAME, CURRENT_DOC_ID_KEY)) as
+    | string
+    | undefined;
+  if (!currentId) return undefined;
+  return loadDocumentById(currentId);
+}
 
-  const recent = (((await db.get(STORE_NAME, RECENT_DOCS_KEY)) as SankeyDocument[] | undefined) ?? []).filter(
-    (item) => item.id !== docId,
+/* ------------------------------------------------------------------ */
+/*  Folder CRUD                                                       */
+/* ------------------------------------------------------------------ */
+
+export async function loadFolders(): Promise<Folder[]> {
+  const db = await getDb();
+  return ((await db.get(STORE_NAME, FOLDERS_KEY)) as Folder[] | undefined) ?? [];
+}
+
+export async function createFolder(folder: Folder): Promise<void> {
+  const db = await getDb();
+  const folders = await loadFolders();
+  await db.put(STORE_NAME, [...folders, folder], FOLDERS_KEY);
+}
+
+export async function renameFolder(
+  folderId: string,
+  name: string,
+): Promise<void> {
+  const db = await getDb();
+  const folders = await loadFolders();
+  const next = folders.map((f) => (f.id === folderId ? { ...f, name } : f));
+  await db.put(STORE_NAME, next, FOLDERS_KEY);
+}
+
+export async function moveFolderTo(
+  folderId: string,
+  parentId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  const folders = await loadFolders();
+  const next = folders.map((f) =>
+    f.id === folderId ? { ...f, parentId } : f,
   );
-  await db.put(STORE_NAME, recent, RECENT_DOCS_KEY);
+  await db.put(STORE_NAME, next, FOLDERS_KEY);
+}
 
-  const currentId = (await db.get(STORE_NAME, CURRENT_DOC_ID_KEY)) as string | undefined;
-  if (currentId === docId) {
-    await db.put(STORE_NAME, next[0]?.id ?? null, CURRENT_DOC_ID_KEY);
-    if (next[0]) {
-      await db.put(STORE_NAME, next[0], CURRENT_DOC_KEY);
+export async function deleteFolder(folderId: string): Promise<void> {
+  const db = await getDb();
+  const folders = await loadFolders();
+
+  // Collect this folder and all descendant folder IDs
+  const toDelete = new Set<string>();
+  const queue = [folderId];
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    toDelete.add(id);
+    for (const f of folders) {
+      if (f.parentId === id && !toDelete.has(f.id)) {
+        queue.push(f.id);
+      }
     }
+  }
+
+  const nextFolders = folders.filter((f) => !toDelete.has(f.id));
+  await db.put(STORE_NAME, nextFolders, FOLDERS_KEY);
+
+  // Move documents in deleted folders to root
+  const docs = await loadAllDocuments();
+  const affectedDocs = docs.filter(
+    (d) => d.folderId !== null && toDelete.has(d.folderId),
+  );
+  for (const doc of affectedDocs) {
+    await upsertDocument({ ...doc, folderId: null });
   }
 }
 
-export async function loadUserTemplates() {
-  const db = await getDb();
-  return ((await db.get(STORE_NAME, USER_TEMPLATES_KEY)) as TemplateSummary[] | undefined) ?? [];
-}
-
-export async function loadUserTemplateById(templateId: string) {
-  const templates = await loadUserTemplates();
-  return templates.find((item) => item.id === templateId);
-}
-
-export async function upsertUserTemplate(template: TemplateSummary) {
-  const db = await getDb();
-  const templates = await loadUserTemplates();
-  const next = [template, ...templates.filter((item) => item.id !== template.id)];
-  await db.put(STORE_NAME, next, USER_TEMPLATES_KEY);
-}
-
-export async function deleteUserTemplate(templateId: string) {
-  const db = await getDb();
-  const templates = await loadUserTemplates();
-  const next = templates.filter((item) => item.id !== templateId);
-  await db.put(STORE_NAME, next, USER_TEMPLATES_KEY);
-
-  const recentTemplateIds = ((await db.get(STORE_NAME, RECENT_TEMPLATE_IDS_KEY)) as string[] | undefined) ?? [];
-  const nextRecentTemplateIds = recentTemplateIds.filter((id) => id !== templateId);
-  await db.put(STORE_NAME, nextRecentTemplateIds, RECENT_TEMPLATE_IDS_KEY);
-}
+/* ------------------------------------------------------------------ */
+/*  App preferences                                                   */
+/* ------------------------------------------------------------------ */
 
 export async function loadAppPreferences(): Promise<AppPreferences> {
   const db = await getDb();
@@ -181,9 +255,9 @@ export async function loadAppPreferences(): Promise<AppPreferences> {
     defaultTheme: raw.defaultTheme === "dark" ? "dark" : "light",
     defaultPerformanceMode:
       raw.defaultPerformanceMode === "quality" ||
-      raw.defaultPerformanceMode === "balanced" ||
-      raw.defaultPerformanceMode === "performance" ||
-      raw.defaultPerformanceMode === "auto"
+        raw.defaultPerformanceMode === "balanced" ||
+        raw.defaultPerformanceMode === "performance" ||
+        raw.defaultPerformanceMode === "auto"
         ? raw.defaultPerformanceMode
         : "auto",
     defaultExportTransparentBg:
@@ -192,13 +266,15 @@ export async function loadAppPreferences(): Promise<AppPreferences> {
         : false,
     defaultExportFileTemplate:
       typeof raw.defaultExportFileTemplate === "string" &&
-      raw.defaultExportFileTemplate.trim().length > 0
+        raw.defaultExportFileTemplate.trim().length > 0
         ? raw.defaultExportFileTemplate
         : "{title}-{date}",
   };
 }
 
-export async function saveAppPreferences(preferences: AppPreferences): Promise<void> {
+export async function saveAppPreferences(
+  preferences: AppPreferences,
+): Promise<void> {
   const db = await getDb();
   await db.put(STORE_NAME, preferences, APP_PREFERENCES_KEY);
 }

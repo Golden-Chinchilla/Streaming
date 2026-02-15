@@ -1,17 +1,27 @@
 "use client";
 
-import { MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SankeyGraph as D3SankeyGraph, sankey, SankeyLink, SankeyNode } from "d3-sankey";
-import { SankeyGraph, SankeyStyle } from "@/lib/types";
+import { CanvasProps } from "@/lib/diagram-registry";
+import { SankeyData } from "./sankey-types";
+import { parseSankeyTextDetailed } from "./sankey-parse";
 import { linkStyleKey } from "@/lib/utils";
 import { DARK_LABEL_COLOR, LIGHT_LABEL_COLOR } from "@/lib/theme";
 
-type Props = {
-  graph: SankeyGraph;
-  style: SankeyStyle;
-  nodePositions: Record<string, number>;
-  nodeStyles: Record<string, { color?: string; opacity?: number }>;
-  linkStyles: Record<string, { color?: string; opacity?: number; widthScale?: number }>;
+// Define the interaction state expected by this canvas
+type SankeyInteractionState = {
+  interactionMode?: "select" | "pan";
+  isSpacePanning?: boolean;
+  selectedNodeIds?: string[];
+  selectedLinkIndex?: number | null;
+  traceMode?: "none" | "upstream" | "downstream";
+  pulseLinkIndex?: number | null;
+  pulseNodeId?: string | null;
+  onSelectionChange?: (ids: string[]) => void;
+  onLinkSelectionChange?: (index: number | null) => void;
+  onLinkEditRequest?: (index: number, anchor: { x: number; y: number }) => void;
+  onNodeEditRequest?: (nodeId: string, anchor: { x: number; y: number }) => void;
+  onZoomChange?: (zoom: number) => void;
   renderHints?: {
     showLabels: boolean;
     enableLinkHover: boolean;
@@ -19,23 +29,6 @@ type Props = {
     simplifyLinkCurves: boolean;
     lowDetailDuringDrag: boolean;
   };
-  interactionMode: "select" | "pan";
-  isSpacePanning?: boolean;
-  selectedNodeIds: string[];
-  selectedLinkIndex: number | null;
-  traceMode: "none" | "upstream" | "downstream";
-  onNodePositionChange: (nodeId: string, y: number) => void;
-  onSelectionChange: (ids: string[]) => void;
-  onLinkSelectionChange: (index: number | null) => void;
-  onLinkEditRequest?: (
-    originalIndex: number,
-    anchor: { x: number; y: number },
-  ) => void;
-  onNodeEditRequest?: (nodeId: string, anchor: { x: number; y: number }) => void;
-  pulseLinkIndex?: number | null;
-  pulseNodeId?: string | null;
-  onZoomChange?: (zoom: number) => void;
-  onSvgReady?: (svg: SVGSVGElement | null) => void;
 };
 
 type NodeDatum = { id: string };
@@ -59,12 +52,7 @@ type DisplayLink = {
 };
 const DUMMY_NODE_PREFIX = "__stage_dummy__";
 
-const VIEW_WIDTH = 1200;
-const VIEW_HEIGHT = 700;
-const LEFT = 52;
-const RIGHT = 1148;
-const TOP = 34;
-const BOTTOM = 666;
+
 
 const palettes = {
   classic: ["var(--flow-1)", "var(--flow-2)", "var(--flow-4)", "var(--flow-5)", "var(--flow-3)", "var(--flow-6)", "var(--flow-8)"],
@@ -77,9 +65,7 @@ const SEMANTIC_ROLE_COLORS = {
   sink: "var(--flow-5)",
 } as const;
 
-function clampNodeTop(top: number, nodeHeight: number) {
-  return Math.max(TOP, Math.min(BOTTOM - nodeHeight, top));
-}
+
 
 function uniqueIds(ids: string[]) {
   return Array.from(new Set(ids));
@@ -94,27 +80,62 @@ function formatCompactValue(value: number) {
 }
 
 export function SankeyCanvas({
-  graph,
-  style,
-  nodePositions,
-  nodeStyles,
-  linkStyles,
-  renderHints,
-  interactionMode,
-  isSpacePanning = false,
-  selectedNodeIds,
-  selectedLinkIndex,
-  traceMode,
-  onNodePositionChange,
-  onSelectionChange,
-  onLinkSelectionChange,
-  onLinkEditRequest,
-  onNodeEditRequest,
-  pulseLinkIndex = null,
-  pulseNodeId = null,
-  onZoomChange,
+  data,
+  width,
+  height,
+  interactionState = {},
+  onDataChange,
   onSvgReady,
-}: Props) {
+}: CanvasProps<SankeyData>) {
+  // Destructure data
+  const { style, nodePositions, nodeStyles, linkStyles, editorText, format } = data;
+
+  // Unpack interaction state
+  const {
+    interactionMode = "select",
+    isSpacePanning = false,
+    selectedNodeIds = [],
+    selectedLinkIndex = null,
+    traceMode = "none",
+    pulseLinkIndex = null,
+    pulseNodeId = null,
+    renderHints,
+    onSelectionChange = () => { },
+    onLinkSelectionChange = () => { },
+    onLinkEditRequest = () => { },
+    onNodeEditRequest = () => { },
+    onZoomChange = () => { },
+  } = (interactionState || {}) as SankeyInteractionState;
+
+  // Internal Parsing
+  const { graph } = useMemo(() => {
+    const result = parseSankeyTextDetailed(editorText, format);
+    if (result.ok) return { graph: result.graph };
+    // TODO: Expose error state needed? For now return empty graph or partial
+    // We could fallback to a safe empty graph
+    return { graph: { nodes: [], links: [] } };
+  }, [editorText, format]);
+
+  // Handler adapters
+  const onNodePositionChange = (nodeId: string, y: number) => {
+    onDataChange?.({
+      ...data,
+      nodePositions: { ...nodePositions, [nodeId]: y },
+    });
+  };
+
+  const VIEW_WIDTH = width;
+  const VIEW_HEIGHT = height;
+  const LEFT = 52;
+  const RIGHT = width - 52;
+  const TOP = 34;
+  const BOTTOM = height - 34;
+
+  // Helper inside component to access dynamic height
+  const clampNodeTop = useCallback((top: number, nodeHeight: number) => {
+    return Math.max(TOP, Math.min(BOTTOM - nodeHeight, top));
+  }, [TOP, BOTTOM]);
+
   const [hoverText, setHoverText] = useState<string | null>(null);
   const [hoveredLinkIndex, setHoveredLinkIndex] = useState<number | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -468,7 +489,9 @@ export function SankeyCanvas({
 
     generator.update(built);
     return built;
-  }, [expandedGraph, layoutOrdering, nodePositions, style.nodePadding, style.nodeWidth]);
+    generator.update(built);
+    return built;
+  }, [expandedGraph, layoutOrdering, nodePositions, style.nodePadding, style.nodeWidth, RIGHT, BOTTOM, clampNodeTop]);
 
   const sourceName = (link: SankeyLink<NodeDatum, LinkDatum>) =>
     (link.source as SankeyNode<NodeDatum, LinkDatum>).id;
@@ -484,8 +507,8 @@ export function SankeyCanvas({
     const rect = ref.getBoundingClientRect();
     const svgX = ((event.clientX - rect.left) / rect.width) * VIEW_WIDTH;
     const svgY = ((event.clientY - rect.top) / rect.height) * VIEW_HEIGHT;
-    const translateX = (1 - zoom) * 600 + pan.x;
-    const translateY = (1 - zoom) * 350 + pan.y;
+    const translateX = (1 - zoom) * (VIEW_WIDTH / 2) + pan.x;
+    const translateY = (1 - zoom) * (VIEW_HEIGHT / 2) + pan.y;
     return {
       x: (svgX - translateX) / zoom,
       y: (svgY - translateY) / zoom,
@@ -507,7 +530,7 @@ export function SankeyCanvas({
       minX0: Number.isFinite(minX0) ? minX0 : LEFT,
       maxX1: Number.isFinite(maxX1) ? maxX1 : RIGHT,
     };
-  }, [layout.nodes]);
+  }, [layout.nodes, LEFT, RIGHT]);
 
   const displayLinks = useMemo(() => {
     const grouped = new Map<
@@ -736,10 +759,10 @@ export function SankeyCanvas({
       setSelectionBox((current) =>
         current
           ? {
-              ...current,
-              x: point.x,
-              y: point.y,
-            }
+            ...current,
+            x: point.x,
+            y: point.y,
+          }
           : current,
       );
     }
@@ -755,8 +778,8 @@ export function SankeyCanvas({
 
       if (isClick) {
         if (!selectionBox.additive) {
-          onSelectionChange([]);
-          onLinkSelectionChange(null);
+          onSelectionChange?.([]);
+          onLinkSelectionChange?.(null);
         }
       } else {
         const hitIds = layout.nodes
@@ -770,10 +793,10 @@ export function SankeyCanvas({
           .map((node) => node.id);
 
         if (selectionBox.additive) {
-          onSelectionChange(uniqueIds([...selectedNodeIds, ...hitIds]));
+          onSelectionChange?.(uniqueIds([...selectedNodeIds, ...hitIds]));
         } else {
-          onSelectionChange(hitIds);
-          onLinkSelectionChange(null);
+          onSelectionChange?.(hitIds);
+          onLinkSelectionChange?.(null);
         }
       }
     }
@@ -863,9 +886,9 @@ export function SankeyCanvas({
                       : hoverContext.softenedLinks.has(index)
                         ? Math.max(0.1, tonedBaseOpacity * 0.72)
                         : Math.max(0.06, tonedBaseOpacity * 0.2)
-                  : hoveredLinkIndex === index || selectedLinkIndex === originalIndex
-                    ? Math.min(1, tonedBaseOpacity + 0.16)
-                    : tonedBaseOpacity;
+                    : hoveredLinkIndex === index || selectedLinkIndex === originalIndex
+                      ? Math.min(1, tonedBaseOpacity + 0.16)
+                      : tonedBaseOpacity;
 
               const sourceNode = nodeMap.get(originalSource);
               const targetNode = nodeMap.get(originalTarget);
@@ -875,11 +898,11 @@ export function SankeyCanvas({
               const path = effectiveHints.simplifyLinkCurves
                 ? `M${x0},${link.y0}L${x1},${link.y1}`
                 : (() => {
-                    const c = Math.max(0.15, Math.min(0.85, style.curvature));
-                    const xi = x0 + (x1 - x0) * c;
-                    const xj = x1 - (x1 - x0) * c;
-                    return `M${x0},${link.y0}C${xi},${link.y0} ${xj},${link.y1} ${x1},${link.y1}`;
-                  })();
+                  const c = Math.max(0.15, Math.min(0.85, style.curvature));
+                  const xi = x0 + (x1 - x0) * c;
+                  const xj = x1 - (x1 - x0) * c;
+                  return `M${x0},${link.y0}C${xi},${link.y0} ${xj},${link.y1} ${x1},${link.y1}`;
+                })();
 
               return (
                 <path
@@ -902,10 +925,12 @@ export function SankeyCanvas({
                     event.preventDefault();
                     event.stopPropagation();
                     onLinkSelectionChange(originalIndex);
-                    onLinkEditRequest?.(originalIndex, {
-                      x: event.clientX,
-                      y: event.clientY,
-                    });
+                    if (onLinkEditRequest) {
+                      onLinkEditRequest(originalIndex, {
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }
                   }}
                   onMouseEnter={() => {
                     if (!canHoverLinks) return;

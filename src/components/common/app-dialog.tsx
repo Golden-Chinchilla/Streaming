@@ -22,15 +22,15 @@ type PromptOptions = {
 
 type DialogState =
   | {
-      type: "confirm";
-      options: ConfirmOptions;
-      resolve: (value: boolean) => void;
-    }
+    type: "confirm";
+    options: ConfirmOptions;
+    resolve: (value: boolean) => void;
+  }
   | {
-      type: "prompt";
-      options: PromptOptions;
-      resolve: (value: string | null) => void;
-    };
+    type: "prompt";
+    options: PromptOptions;
+    resolve: (value: string | null) => void;
+  };
 
 export function useAppDialog() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -72,11 +72,11 @@ export function useAppDialog() {
     const confirmButtonClass = isDanger ? buttonDangerSm : buttonPrimarySm;
 
     return (
-      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-[color:color-mix(in_srgb,var(--bg-overlay)_80%,transparent)] p-4 backdrop-blur-sm">
-        <div className="w-full max-w-md rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_92%,transparent)] p-5 shadow-xl">
-          <p className="text-sm font-semibold text-[var(--text-primary)]">{dialog.options.title}</p>
+      <div className="fixed inset-0 z-120 flex items-center justify-center bg-[color-mix(in_srgb,var(--bg-overlay)_80%,transparent)] p-4 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-[color-mix(in_srgb,var(--bg-elevated)_92%,transparent)] p-5 shadow-xl">
+          <p className="text-sm font-semibold text-foreground">{dialog.options.title}</p>
           {dialog.options.message && (
-            <p className="mt-2 text-sm text-[var(--text-secondary)]">{dialog.options.message}</p>
+            <p className="mt-2 text-sm text-(--text-secondary)">{dialog.options.message}</p>
           )}
 
           {dialog.type === "prompt" && (
@@ -85,7 +85,7 @@ export function useAppDialog() {
               value={promptValue}
               onChange={(event) => setPromptValue(event.target.value)}
               placeholder={dialog.options.placeholder}
-              className="mt-3 w-full rounded border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--primary)]"
+              className="mt-3 w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-foreground outline-none focus:border-primary"
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();

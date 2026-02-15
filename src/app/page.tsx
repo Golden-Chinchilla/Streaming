@@ -1,5 +1,5 @@
-import { TemplateGallery } from "@/components/home/template-gallery";
+import { DocumentHub } from "@/components/home/document-hub";
 
 export default function Home() {
-  return <TemplateGallery />;
+  return <DocumentHub />;
 }

@@ -1,11 +1,21 @@
 ﻿"use client";
 
 import { create } from "zustand";
-import { ParseIssue, parseSankeyText, parseSankeyTextDetailed } from "@/lib/parse";
-import { blankDocument } from "@/lib/templates";
-import { DataFormat, SankeyDocument, SankeyGraph, SankeyStyle } from "@/lib/types";
+import {
+  ParseIssue,
+  parseSankeyText,
+  parseSankeyTextDetailed,
+  SankeyData,
+  SankeyGraph,
+  SankeyStyle,
+  defaultSankeyData,
+} from "@/plugins/sankey";
+import { BaseDocument, DataFormat } from "@/lib/types";
 import { linkStyleKey } from "@/lib/utils";
 import { DARK_LABEL_COLOR, LIGHT_LABEL_COLOR } from "@/lib/theme";
+
+// Register the sankey plugin on first import
+import "@/plugins/sankey/sankey-plugin";
 
 const HISTORY_LIMIT = 60;
 const TEXT_HISTORY_GROUP_WINDOW_MS = 900;
@@ -14,8 +24,33 @@ const TEXT_PARSE_DEBOUNCE_MS = 220;
 let lastTextHistoryAt = 0;
 let textParseTimer: ReturnType<typeof setTimeout> | null = null;
 
+/* ------------------------------------------------------------------ */
+/*  Helpers to read/write the Sankey-specific `data` blob              */
+/* ------------------------------------------------------------------ */
+
+function getSankeyData(doc: BaseDocument): SankeyData {
+  return doc.data as unknown as SankeyData;
+}
+
+function withSankeyData(doc: BaseDocument, patch: Partial<SankeyData>): BaseDocument {
+  const current = getSankeyData(doc);
+  return {
+    ...doc,
+    updatedAt: Date.now(),
+    data: { ...current, ...patch } as unknown as Record<string, unknown>,
+  };
+}
+
+function withTimestamp(doc: BaseDocument): BaseDocument {
+  return { ...doc, updatedAt: Date.now() };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Store types                                                       */
+/* ------------------------------------------------------------------ */
+
 type EditorState = {
-  document: SankeyDocument;
+  document: BaseDocument;
   graph: SankeyGraph;
   parseError: string | null;
   parseIssue: ParseIssue | null;
@@ -24,49 +59,70 @@ type EditorState = {
   selectedNodeIds: string[];
   selectedLinkIndex: number | null;
   traceMode: "none" | "upstream" | "downstream";
-  historyPast: SankeyDocument[];
-  historyFuture: SankeyDocument[];
-  initialize: (doc: SankeyDocument) => void;
+  historyPast: BaseDocument[];
+  historyFuture: BaseDocument[];
+
+  // Lifecycle
+  initialize: (doc: BaseDocument) => void;
   setHasHydrated: (value: boolean) => void;
+
+  // Document metadata
   setTitle: (title: string) => void;
   setFormat: (format: DataFormat) => void;
   setEditorText: (text: string) => void;
   setAutoSync: (value: boolean) => void;
   syncFromEditor: () => void;
+
+  // Sankey-specific style & layout (delegated to plugin data)
   patchStyle: (stylePatch: Partial<SankeyStyle>) => void;
   setNodePosition: (nodeId: string, y: number) => void;
   setNodePositions: (positions: Record<string, number>) => void;
   clearNodePositions: () => void;
+
+  // Selection
   setSelectedNodeIds: (ids: string[]) => void;
   setSelectedLinkIndex: (index: number | null) => void;
   toggleNodeSelection: (nodeId: string, additive: boolean) => void;
   clearSelection: () => void;
   setTraceMode: (mode: "none" | "upstream" | "downstream") => void;
+
+  // Node/link styling
   applyNodeColorToSelection: (color: string) => void;
   applyNodeOpacityToSelection: (opacity: number) => void;
   clearNodeColorFromSelection: () => void;
   clearSelectedNodeStyles: () => void;
   patchSelectedLinkStyle: (style: { color?: string; opacity?: number; widthScale?: number }) => void;
   clearSelectedLinkStyle: () => void;
+
+  // History
   undo: () => void;
   redo: () => void;
 };
 
-function toDocument(source: Omit<SankeyDocument, "id" | "updatedAt">): SankeyDocument {
+/* ------------------------------------------------------------------ */
+/*  Normalisation & parsing                                           */
+/* ------------------------------------------------------------------ */
+
+function createNewDocument(data: SankeyData): BaseDocument {
   return {
     id: crypto.randomUUID(),
+    title: "Untitled Diagram",
+    diagramType: "sankey",
+    folderId: null,
+    createdAt: Date.now(),
     updatedAt: Date.now(),
-    ...source,
+    data: data as unknown as Record<string, unknown>,
   };
 }
 
-function normalizeDocument(document: SankeyDocument): SankeyDocument {
-  const style = document.style;
-  return {
-    ...document,
-    nodePositions: document.nodePositions ?? {},
-    nodeStyles: document.nodeStyles ?? {},
-    linkStyles: document.linkStyles ?? {},
+function normalizeDocument(doc: BaseDocument): BaseDocument {
+  const sd = getSankeyData(doc);
+  const style = sd.style ?? {};
+  return withSankeyData(doc, {
+    ...sd,
+    nodePositions: sd.nodePositions ?? {},
+    nodeStyles: sd.nodeStyles ?? {},
+    linkStyles: sd.linkStyles ?? {},
     style: {
       ...style,
       theme: style.theme ?? "light",
@@ -79,14 +135,10 @@ function normalizeDocument(document: SankeyDocument): SankeyDocument {
       labelColor: style.labelColor ?? (style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR),
       labelFontFamily: style.labelFontFamily ?? "Roboto",
     },
-  };
+  });
 }
 
-function withTimestamp(document: SankeyDocument) {
-  return { ...document, updatedAt: Date.now() };
-}
-
-function addPastSnapshot(past: SankeyDocument[], snapshot: SankeyDocument) {
+function addPastSnapshot(past: BaseDocument[], snapshot: BaseDocument) {
   const next = [...past, snapshot];
   if (next.length > HISTORY_LIMIT) {
     next.shift();
@@ -94,14 +146,11 @@ function addPastSnapshot(past: SankeyDocument[], snapshot: SankeyDocument) {
   return next;
 }
 
-function parseDocument(document: SankeyDocument) {
-  const result = parseSankeyTextDetailed(document.editorText, document.format);
+function parseDocument(doc: BaseDocument) {
+  const sd = getSankeyData(doc);
+  const result = parseSankeyTextDetailed(sd.editorText, sd.format);
   if (result.ok) {
-    return {
-      graph: result.graph,
-      parseError: null,
-      parseIssue: null,
-    };
+    return { graph: result.graph, parseError: null, parseIssue: null };
   }
   return {
     graph: null,
@@ -110,8 +159,16 @@ function parseDocument(document: SankeyDocument) {
   };
 }
 
-const initialDocument = toDocument(blankDocument);
-const initialGraph = parseSankeyText(initialDocument.editorText, initialDocument.format);
+/* ------------------------------------------------------------------ */
+/*  Initial state                                                     */
+/* ------------------------------------------------------------------ */
+
+const initialDocument = createNewDocument(defaultSankeyData);
+const initialGraph = parseSankeyText(defaultSankeyData.editorText, defaultSankeyData.format);
+
+/* ------------------------------------------------------------------ */
+/*  Zustand store                                                     */
+/* ------------------------------------------------------------------ */
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   document: initialDocument,
@@ -125,6 +182,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   traceMode: "none",
   historyPast: [],
   historyFuture: [],
+
   initialize: (doc) => {
     if (textParseTimer) {
       clearTimeout(textParseTimer);
@@ -156,7 +214,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selectedLinkIndex: null,
     });
   },
+
   setHasHydrated: (value) => set({ hasHydrated: value }),
+
   setTitle: (title) =>
     set((state) => {
       const nextDocument = withTimestamp({ ...state.document, title });
@@ -166,9 +226,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         historyFuture: [],
       };
     }),
+
   setFormat: (format) =>
     set((state) => {
-      const nextDocument = withTimestamp({ ...state.document, format });
+      const nextDocument = withSankeyData(state.document, { format });
       const parsed = parseDocument(nextDocument);
       return {
         document: nextDocument,
@@ -179,12 +240,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         historyFuture: [],
       };
     }),
+
   setEditorText: (text) => {
     const { autoSync } = get();
     const now = Date.now();
 
     set((state) => {
-      const nextDocument = withTimestamp({ ...state.document, editorText: text });
+      const nextDocument = withSankeyData(state.document, { editorText: text });
       const shouldCreateHistoryPoint =
         state.historyPast.length === 0 || now - lastTextHistoryAt > TEXT_HISTORY_GROUP_WINDOW_MS;
 
@@ -217,11 +279,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }));
     }, TEXT_PARSE_DEBOUNCE_MS);
   },
+
   setAutoSync: (value) => set({ autoSync: value }),
+
   syncFromEditor: () => {
     const { document } = get();
+    const sd = getSankeyData(document);
     try {
-      const graph = parseSankeyText(document.editorText, document.format);
+      const graph = parseSankeyText(sd.editorText, sd.format);
       set((state) => ({
         graph,
         parseError: null,
@@ -239,39 +304,46 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     }
   },
+
   patchStyle: (stylePatch) =>
-    set((state) => ({
-      document: withTimestamp({
-        ...state.document,
-        style: { ...state.document.style, ...stylePatch },
-      }),
-      historyPast: addPastSnapshot(state.historyPast, state.document),
-      historyFuture: [],
-    })),
+    set((state) => {
+      const sd = getSankeyData(state.document);
+      return {
+        document: withSankeyData(state.document, {
+          style: { ...sd.style, ...stylePatch },
+        }),
+        historyPast: addPastSnapshot(state.historyPast, state.document),
+        historyFuture: [],
+      };
+    }),
+
   setNodePosition: (nodeId, y) =>
-    set((state) => ({
-      document: withTimestamp({
-        ...state.document,
-        nodePositions: { ...state.document.nodePositions, [nodeId]: y },
-      }),
-    })),
+    set((state) => {
+      const sd = getSankeyData(state.document);
+      return {
+        document: withSankeyData(state.document, {
+          nodePositions: { ...sd.nodePositions, [nodeId]: y },
+        }),
+      };
+    }),
+
   setNodePositions: (positions) =>
     set((state) => ({
-      document: withTimestamp({
-        ...state.document,
-        nodePositions: { ...positions },
-      }),
+      document: withSankeyData(state.document, { nodePositions: { ...positions } }),
       historyPast: addPastSnapshot(state.historyPast, state.document),
       historyFuture: [],
     })),
+
   clearNodePositions: () =>
     set((state) => ({
-      document: withTimestamp({ ...state.document, nodePositions: {} }),
+      document: withSankeyData(state.document, { nodePositions: {} }),
       historyPast: addPastSnapshot(state.historyPast, state.document),
       historyFuture: [],
     })),
+
   setSelectedNodeIds: (ids) => set({ selectedNodeIds: ids, selectedLinkIndex: null }),
   setSelectedLinkIndex: (index) => set({ selectedLinkIndex: index, selectedNodeIds: [] }),
+
   toggleNodeSelection: (nodeId, additive) =>
     set((state) => {
       if (!additive) {
@@ -284,39 +356,46 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           : [...state.selectedNodeIds, nodeId],
       };
     }),
+
   clearSelection: () => set({ selectedNodeIds: [], selectedLinkIndex: null }),
   setTraceMode: (mode) => set({ traceMode: mode }),
+
   applyNodeColorToSelection: (color) =>
     set((state) => {
       if (state.selectedNodeIds.length === 0) return {};
-      const nextNodeStyles = { ...state.document.nodeStyles };
+      const sd = getSankeyData(state.document);
+      const nextNodeStyles = { ...sd.nodeStyles };
       for (const nodeId of state.selectedNodeIds) {
         nextNodeStyles[nodeId] = { ...(nextNodeStyles[nodeId] ?? {}), color };
       }
       return {
-        document: withTimestamp({ ...state.document, nodeStyles: nextNodeStyles }),
+        document: withSankeyData(state.document, { nodeStyles: nextNodeStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   applyNodeOpacityToSelection: (opacity) =>
     set((state) => {
       if (state.selectedNodeIds.length === 0) return {};
       const clamped = Math.max(0.1, Math.min(1, opacity));
-      const nextNodeStyles = { ...state.document.nodeStyles };
+      const sd = getSankeyData(state.document);
+      const nextNodeStyles = { ...sd.nodeStyles };
       for (const nodeId of state.selectedNodeIds) {
         nextNodeStyles[nodeId] = { ...(nextNodeStyles[nodeId] ?? {}), opacity: clamped };
       }
       return {
-        document: withTimestamp({ ...state.document, nodeStyles: nextNodeStyles }),
+        document: withSankeyData(state.document, { nodeStyles: nextNodeStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   clearNodeColorFromSelection: () =>
     set((state) => {
       if (state.selectedNodeIds.length === 0) return {};
-      const nextNodeStyles = { ...state.document.nodeStyles };
+      const sd = getSankeyData(state.document);
+      const nextNodeStyles = { ...sd.nodeStyles };
       for (const nodeId of state.selectedNodeIds) {
         if (!nextNodeStyles[nodeId]) continue;
         const rest = { ...nextNodeStyles[nodeId] };
@@ -328,54 +407,61 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
       return {
-        document: withTimestamp({ ...state.document, nodeStyles: nextNodeStyles }),
+        document: withSankeyData(state.document, { nodeStyles: nextNodeStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   clearSelectedNodeStyles: () =>
     set((state) => {
       if (state.selectedNodeIds.length === 0) return {};
-      const nextNodeStyles = { ...state.document.nodeStyles };
+      const sd = getSankeyData(state.document);
+      const nextNodeStyles = { ...sd.nodeStyles };
       for (const nodeId of state.selectedNodeIds) {
         delete nextNodeStyles[nodeId];
       }
       return {
-        document: withTimestamp({ ...state.document, nodeStyles: nextNodeStyles }),
+        document: withSankeyData(state.document, { nodeStyles: nextNodeStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   patchSelectedLinkStyle: (stylePatch) =>
     set((state) => {
       if (state.selectedLinkIndex == null) return {};
+      const sd = getSankeyData(state.document);
       const key = linkStyleKey(state.selectedLinkIndex);
       const nextLinkStyles = {
-        ...state.document.linkStyles,
+        ...sd.linkStyles,
         [key]: {
-          ...(state.document.linkStyles[key] ?? {}),
+          ...(sd.linkStyles[key] ?? {}),
           ...stylePatch,
         },
       };
       return {
-        document: withTimestamp({ ...state.document, linkStyles: nextLinkStyles }),
+        document: withSankeyData(state.document, { linkStyles: nextLinkStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   clearSelectedLinkStyle: () =>
     set((state) => {
       if (state.selectedLinkIndex == null) return {};
+      const sd = getSankeyData(state.document);
       const key = linkStyleKey(state.selectedLinkIndex);
-      if (!state.document.linkStyles[key]) return {};
-      const nextLinkStyles = { ...state.document.linkStyles };
+      if (!sd.linkStyles[key]) return {};
+      const nextLinkStyles = { ...sd.linkStyles };
       delete nextLinkStyles[key];
       return {
-        document: withTimestamp({ ...state.document, linkStyles: nextLinkStyles }),
+        document: withSankeyData(state.document, { linkStyles: nextLinkStyles }),
         historyPast: addPastSnapshot(state.historyPast, state.document),
         historyFuture: [],
       };
     }),
+
   undo: () =>
     set((state) => {
       if (state.historyPast.length === 0) return {};
@@ -393,6 +479,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLinkIndex: null,
       };
     }),
+
   redo: () =>
     set((state) => {
       if (state.historyFuture.length === 0) return {};
@@ -410,9 +497,3 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       };
     }),
 }));
-
-
-
-
-
-

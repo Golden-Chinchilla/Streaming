@@ -5,6 +5,9 @@
   --color-foreground: var(--text-primary);
   --color-surface: var(--bg-secondary);
   --color-surface-light: var(--bg-tertiary);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
   --color-muted: var(--text-tertiary);
   --color-border: var(--border-base);
   --color-primary: var(--primary);
@@ -18,6 +21,10 @@
   --radius-lg: 16px;
   --radius-xl: 28px;
   --radius-2xl: 32px;
+
+  /* Animation */
+  --animate-menu-open: menu-open 120ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-sidebar-in: sidebar-in 220ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 :root {
@@ -29,6 +36,20 @@
   --bg-tertiary: #E8EDF4; /* Surface Container */
   --bg-elevated: #F3F6FC; /* Surface Container High */
   --bg-overlay: rgba(255, 255, 255, 0.95);
+
+  /* MD3 Surface Container Hierarchy */
+  --surface-container: #F0F4F8;
+  --surface-container-high: #E8EDF4;
+  --surface-container-highest: #DDE3EA;
+
+  /* State Layer Opacities */
+  --state-hover-opacity: 0.08;
+  --state-pressed-opacity: 0.12;
+  --state-focus-opacity: 0.12;
+
+  /* Header specific */
+  --header-row1-height: 52px;
+  --header-row2-height: 36px;
 
   --canvas-bg: #F8F9FA;
   --canvas-grid: #E1E3E1;
@@ -125,6 +146,20 @@
   --bg-tertiary: #2A2A2A; /* Surface Container */
   --bg-elevated: #333537; /* Surface Container High */
   --bg-overlay: rgba(19, 19, 19, 0.95);
+
+  /* MD3 Surface Container Hierarchy - Dark */
+  --surface-container: #1F1F1F;
+  --surface-container-high: #2A2A2A;
+  --surface-container-highest: #333537;
+
+  /* State Layer Opacities (same as light) */
+  --state-hover-opacity: 0.08;
+  --state-pressed-opacity: 0.12;
+  --state-focus-opacity: 0.12;
+
+  /* Header specific */
+  --header-row1-height: 52px;
+  --header-row2-height: 36px;
 
   --canvas-bg: #131313;
   --canvas-grid: #444746;
@@ -280,4 +315,85 @@ body {
     linear-gradient(var(--canvas-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+/* MD3 Menu open animation */
+@keyframes menu-open {
+  from {
+    opacity: 0;
+    transform: scaleY(0.92) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+  }
+}
+
+/* Sidebar slide-in animation */
+@keyframes sidebar-in {
+  from {
+    opacity: 0.6;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* MD3 State Layer utility */
+.md3-state-layer {
+  position: relative;
+}
+.md3-state-layer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.md3-state-layer:hover::after {
+  opacity: var(--state-hover-opacity);
+}
+.md3-state-layer:active::after {
+  opacity: var(--state-pressed-opacity);
+}
+.md3-state-layer:focus-visible::after {
+  opacity: var(--state-focus-opacity);
+}
+
+/* MD3 Segmented Button */
+.md3-segmented-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  border: 1px solid var(--border-base);
+  color: var(--text-secondary);
+  background: transparent;
+}
+.md3-segmented-btn:hover {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.md3-segmented-btn.active {
+  background: var(--primary-subtle);
+  color: var(--primary);
+  border-color: var(--primary);
+  font-weight: 600;
+}
+
+/* Floating sidebar card */
+.sidebar-card {
+  border-radius: 16px;
+  box-shadow: var(--shadow-base);
+  border: 1px solid var(--border-base);
+  overflow: hidden;
 }

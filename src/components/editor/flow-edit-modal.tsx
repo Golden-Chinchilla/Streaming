@@ -107,21 +107,21 @@ export function FlowEditModal(props: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[125] flex items-center justify-center bg-transparent p-4"
+      className="fixed inset-0 z-125 flex items-center justify-center bg-transparent p-4"
       onClick={props.onClose}
     >
       <div
-        className="w-full max-w-md rounded-xl border border-[var(--border-base)] bg-[var(--bg-elevated)] p-4 shadow-xl"
+        className="w-full max-w-md rounded-xl border border-border bg-(--bg-elevated) p-4 shadow-xl"
         style={modalStyle}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-base font-semibold text-[var(--text-primary)]">{title}</p>
+          <p className="text-base font-semibold text-foreground">{title}</p>
           {props.mode === "link" && (
             <button
               type="button"
               onClick={props.onDelete}
-              className="rounded-md border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] px-3 py-1.5 text-xs font-medium text-[color:color-mix(in_srgb,var(--error)_78%,white)]"
+              className="rounded-md border border-[color-mix(in_srgb,var(--error)_50%,transparent)] px-3 py-1.5 text-xs font-medium text-[color-mix(in_srgb,var(--error)_78%,white)]"
             >
               Delete
             </button>
@@ -137,14 +137,14 @@ export function FlowEditModal(props: Props) {
               props.onSave();
             }}
           >
-            <label className="block text-sm text-[var(--text-secondary)]">
+            <label className="block text-sm text-(--text-secondary)">
               From
               <select
                 value={props.draft.source}
                 onChange={(event) =>
                   props.onDraftChange({ ...props.draft, source: event.target.value })
                 }
-                className="mt-1 w-full rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-2 text-[var(--text-primary)]"
+                className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-foreground"
               >
                 {props.nodeOptions.map((nodeId) => (
                   <option key={`link-from-${nodeId}`} value={nodeId}>
@@ -153,14 +153,14 @@ export function FlowEditModal(props: Props) {
                 ))}
               </select>
             </label>
-            <label className="block text-sm text-[var(--text-secondary)]">
+            <label className="block text-sm text-(--text-secondary)">
               To
               <select
                 value={props.draft.target}
                 onChange={(event) =>
                   props.onDraftChange({ ...props.draft, target: event.target.value })
                 }
-                className="mt-1 w-full rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-2 text-[var(--text-primary)]"
+                className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-foreground"
               >
                 {props.nodeOptions.map((nodeId) => (
                   <option key={`link-to-${nodeId}`} value={nodeId}>
@@ -169,7 +169,7 @@ export function FlowEditModal(props: Props) {
                 ))}
               </select>
             </label>
-            <label className="block text-sm text-[var(--text-secondary)]">
+            <label className="block text-sm text-(--text-secondary)">
               Value
               <input
                 type="number"
@@ -183,7 +183,7 @@ export function FlowEditModal(props: Props) {
                     value: Number(event.target.value),
                   })
                 }
-                className="mt-1 w-full rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-2 text-[var(--text-primary)]"
+                className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-foreground"
               />
             </label>
             {(props.related || props.onJumpSameSource || props.onJumpSameTarget) && (
@@ -192,7 +192,7 @@ export function FlowEditModal(props: Props) {
                   type="button"
                   onClick={props.onJumpSameSource}
                   disabled={!props.onJumpSameSource || (props.related?.sameSourceCount ?? 0) <= 0}
-                  className="rounded-md border border-[var(--border-base)] px-2.5 py-1.5 text-xs text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:opacity-45"
+                  className="rounded-md border border-border px-2.5 py-1.5 text-xs text-(--text-secondary) disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Next Same From ({props.related?.sameSourceCount ?? 0})
                 </button>
@@ -200,7 +200,7 @@ export function FlowEditModal(props: Props) {
                   type="button"
                   onClick={props.onJumpSameTarget}
                   disabled={!props.onJumpSameTarget || (props.related?.sameTargetCount ?? 0) <= 0}
-                  className="rounded-md border border-[var(--border-base)] px-2.5 py-1.5 text-xs text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:opacity-45"
+                  className="rounded-md border border-border px-2.5 py-1.5 text-xs text-(--text-secondary) disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Next Same To ({props.related?.sameTargetCount ?? 0})
                 </button>
@@ -217,7 +217,7 @@ export function FlowEditModal(props: Props) {
               props.onSave();
             }}
           >
-            <label className="block text-sm text-[var(--text-secondary)]">
+            <label className="block text-sm text-(--text-secondary)">
               Node Name
               <input
                 type="text"
@@ -226,20 +226,20 @@ export function FlowEditModal(props: Props) {
                 onChange={(event) =>
                   props.onDraftChange({ ...props.draft, nextId: event.target.value })
                 }
-                className="mt-1 w-full rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-2 text-[var(--text-primary)]"
+                className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-foreground"
               />
             </label>
             {props.stats && (
-              <div className="grid grid-cols-2 gap-2 text-xs text-[var(--text-secondary)]">
-                <div className="rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 py-1.5">
+              <div className="grid grid-cols-2 gap-2 text-xs text-(--text-secondary)">
+                <div className="rounded-md border border-border bg-surface px-2 py-1.5">
                   Incoming: {props.stats.incomingCount} ({props.stats.incomingValue.toLocaleString()})
                 </div>
-                <div className="rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 py-1.5">
+                <div className="rounded-md border border-border bg-surface px-2 py-1.5">
                   Outgoing: {props.stats.outgoingCount} ({props.stats.outgoingValue.toLocaleString()})
                 </div>
               </div>
             )}
-            <p className="text-xs text-[var(--text-muted)]">
+            <p className="text-xs text-(--text-muted)">
               Renaming updates all links that reference this node.
             </p>
             <button type="submit" className="hidden" aria-hidden="true" />
@@ -247,7 +247,7 @@ export function FlowEditModal(props: Props) {
         )}
 
         {props.error && (
-          <p className="mt-3 rounded-md border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] px-3 py-2 text-xs text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
+          <p className="mt-3 rounded-md border border-[color-mix(in_srgb,var(--error)_50%,transparent)] bg-[color-mix(in_srgb,var(--error)_14%,transparent)] px-3 py-2 text-xs text-[color-mix(in_srgb,var(--error)_78%,white)]">
             {props.error}
           </p>
         )}
@@ -256,7 +256,7 @@ export function FlowEditModal(props: Props) {
           <button
             type="button"
             onClick={props.onClose}
-            className="rounded-md border border-[var(--border-base)] px-3 py-1.5 text-sm text-[var(--text-secondary)]"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-(--text-secondary)"
           >
             Cancel
           </button>
@@ -264,7 +264,7 @@ export function FlowEditModal(props: Props) {
             type="button"
             onClick={props.onSave}
             disabled={props.canSave === false}
-            className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-[var(--text-on-primary)] disabled:cursor-not-allowed disabled:opacity-45"
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-(--text-on-primary) disabled:cursor-not-allowed disabled:opacity-45"
           >
             Save
           </button>

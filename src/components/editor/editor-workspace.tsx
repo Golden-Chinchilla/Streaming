@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   CopyPlus,
   Download,
   LayoutTemplate,
@@ -14,44 +13,31 @@ import {
   Moon,
   Play,
   Redo2,
-  Settings2,
   Trash2,
   Undo2,
-  WandSparkles,
   Sun,
   FileUp,
   FileDown,
 } from "lucide-react";
 import { sankey, SankeyGraph as D3SankeyGraph } from "d3-sankey";
-import { parseSankeyTextDetailed } from "@/lib/parse";
+import { parseSankeyTextDetailed } from "@/plugins/sankey/sankey-parse";
 import {
-  clearRecentTemplateIds,
   deleteDocumentById,
-  deleteUserTemplates,
-  deleteUserTemplate,
   loadAppPreferences,
   loadAllDocuments,
   loadCurrentDocument,
   loadDocumentById,
-  loadUserTemplates,
-  loadRecentTemplateIds,
-  loadUserTemplateById,
-  saveCurrentDocument,
   saveAppPreferences,
-  saveRecentDocument,
-  saveRecentTemplate,
   setCurrentDocumentId,
-  upsertUserTemplate,
   upsertDocument,
 } from "@/lib/storage";
-import { blankDocument, templateById, templateList } from "@/lib/templates";
 import {
   AppPreferences,
   DataFormat,
   PerformanceMode,
-  SankeyDocument,
-  TemplateSummary,
+  BaseDocument,
 } from "@/lib/types";
+import { SankeyData } from "@/plugins/sankey/sankey-types";
 import { AppIssue } from "@/lib/issues";
 import {
   DARK_LABEL_COLOR,
@@ -60,7 +46,7 @@ import {
   LIGHT_LABEL_COLOR,
 } from "@/lib/theme";
 import { SankeyMonacoEditor } from "@/components/editor/monaco-editor";
-import { SankeyCanvas } from "@/components/editor/sankey-canvas";
+import { getDiagramPlugin } from "@/lib/diagram-registry";
 import {
   FlowEditModal,
   LinkEditDraft,
@@ -68,13 +54,10 @@ import {
 } from "@/components/editor/flow-edit-modal";
 import { IssueCenter } from "@/components/common/issue-center";
 import { useAppDialog } from "@/components/common/app-dialog";
-import {
-  buttonSecondaryTiny,
-  buttonDangerSoftTiny,
-  withDisabled,
-} from "@/components/common/interaction-styles";
+
 import { useEditorStore } from "@/store/editor-store";
-import { EditableLink, serializeLinksByFormat } from "@/lib/graph-serialize";
+import { EditableLink } from "@/plugins/sankey/sankey-types";
+import { serializeLinksByFormat } from "@/plugins/sankey/sankey-serialize";
 
 function downloadFile(name: string, mime: string, content: string) {
   const blob = new Blob([content], { type: mime });
@@ -131,7 +114,6 @@ function isTransparentColor(value: string | null | undefined) {
 }
 
 type Props = {
-  templateId?: string;
   docId?: string;
 };
 
@@ -139,12 +121,6 @@ const EXPORT_SETTINGS_STORAGE_KEY = "streaming-export-settings-v1";
 const LEFT_WORKBENCH_MODE_STORAGE_KEY = "streaming-editor-left-workbench-mode-v1";
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
-const USER_TEMPLATE_ACCENTS = [
-  "from-blue-500 to-cyan-500",
-  "from-emerald-500 to-teal-500",
-  "from-fuchsia-500 to-orange-500",
-  "from-indigo-500 to-sky-500",
-];
 
 type AutoLayoutStrategy = "reset" | "compact" | "spacious" | "centered";
 type LayoutNodeDatum = { id: string };
@@ -300,28 +276,24 @@ function viewportRange(width: number): "wide" | "medium" | "narrow" {
   return "narrow";
 }
 
-export function EditorWorkspace({ templateId, docId }: Props) {
+export function EditorWorkspace({ docId }: Props) {
   const router = useRouter();
-  const { confirm, prompt, dialogNode } = useAppDialog();
+  const { confirm, dialogNode } = useAppDialog();
   const [initialExportSettings] = useState(loadExportSettingsFromStorage);
   const [isAppPreferencesReady, setIsAppPreferencesReady] = useState(false);
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(
     DEFAULT_APP_PREFERENCES,
   );
   const [showDocuments, setShowDocuments] = useState(false);
-  const [libraryTab, setLibraryTab] = useState<"documents" | "templates">("documents");
   const [librarySearch, setLibrarySearch] = useState("");
-  const [libraryTemplateSourceMode, setLibraryTemplateSourceMode] = useState<
-    "all" | "user" | "builtin"
-  >("all");
-  const [libraryTemplateDifficultyFilter, setLibraryTemplateDifficultyFilter] = useState<
-    "all" | "Easy" | "Medium" | "Advanced"
-  >("all");
-  const [libraryTemplateTagFilter, setLibraryTemplateTagFilter] = useState("all");
-  const [allDocuments, setAllDocuments] = useState<SankeyDocument[]>([]);
-  const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
-  const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
-  const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
+  const [allDocuments, setAllDocuments] = useState<BaseDocument[]>([]);
+
+  const filteredDocuments = useMemo(() => {
+    if (!librarySearch.trim()) return allDocuments;
+    const lower = librarySearch.toLowerCase();
+    return allDocuments.filter(d => (d.title || "Untitled").toLowerCase().includes(lower));
+  }, [allDocuments, librarySearch]);
+
   const [isDragOver, setIsDragOver] = useState(false);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
   const [isSpacePanning, setIsSpacePanning] = useState(false);
@@ -351,6 +323,14 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [linkEditDraft, setLinkEditDraft] = useState<LinkEditDraft | null>(null);
   const [nodeEditDraft, setNodeEditDraft] = useState<NodeEditDraft | null>(null);
   const [editorModalError, setEditorModalError] = useState<string | null>(null);
+
+
+
+  // If we have a plugin, use its editor mode. Otherwise default to 'code' (legacy safe).
+
+  // For now we assume Sankey is always code mode, as per existing logic.
+
+  // --- Theme Sync & Auto-save ---
   const [editorModalAnchor, setEditorModalAnchor] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -360,7 +340,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [showAutoLayoutMenu, setShowAutoLayoutMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
-  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "labels" | "layout">("view");
+  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "style">("view");
   const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
 
 
@@ -394,7 +374,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setAutoSync,
     syncFromEditor,
     patchStyle,
-    setNodePosition,
     setNodePositions,
     clearNodePositions,
     setSelectedNodeIds,
@@ -407,23 +386,35 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     redo,
   } = useEditorStore();
 
-  const alignDocThemeWithPreference = useCallback((doc: SankeyDocument): SankeyDocument => {
+  const sankeyData = currentDoc.data as unknown as SankeyData;
+
+  const alignDocThemeWithPreference = useCallback((doc: BaseDocument): BaseDocument => {
     const preferredTheme = appPreferences.defaultTheme;
-    if (doc.style.theme === preferredTheme) return doc;
-    const prevDefaultLabelColor = doc.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+    // We only know how to update usage for Sankey diagrams right now
+    if (doc.diagramType !== 'sankey') return doc;
+
+    const data = doc.data as unknown as SankeyData;
+    if (data.style.theme === preferredTheme) return doc;
+
+    const prevDefaultLabelColor = data.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
     const nextDefaultLabelColor = preferredTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+
     return {
       ...doc,
-      style: {
-        ...doc.style,
-        theme: preferredTheme,
-        // Only auto-switch label color when it was still using the old default.
-        labelColor: doc.style.labelColor === prevDefaultLabelColor
-          ? nextDefaultLabelColor
-          : doc.style.labelColor,
-      },
+      data: {
+        ...data,
+        style: {
+          ...data.style,
+          theme: preferredTheme,
+          labelColor: data.style.labelColor === prevDefaultLabelColor
+            ? nextDefaultLabelColor
+            : data.style.labelColor,
+        },
+      } as unknown as Record<string, unknown>,
     };
   }, [appPreferences.defaultTheme]);
+
+
 
   useEffect(() => {
     let mounted = true;
@@ -450,24 +441,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     if (!isAppPreferencesReady) return;
     let isMounted = true;
     async function bootstrap() {
-      const template = templateById(templateId) ?? (templateId ? await loadUserTemplateById(templateId) : undefined);
-      if (template) {
-        const nextDoc = alignDocThemeWithPreference({
-          ...template.document,
-          id: crypto.randomUUID(),
-          updatedAt: Date.now(),
-        });
-        initialize(nextDoc);
-        await upsertDocument(nextDoc);
-        await setCurrentDocumentId(nextDoc.id);
-        await saveRecentTemplate(template.id);
-        if (isMounted) setHasHydrated(true);
-        return;
-      }
-
       if (docId) {
         const byId = await loadDocumentById(docId);
         if (byId) {
+          // alignDocThemeWithPreference needs to work with BaseDocument
           const themedDoc = alignDocThemeWithPreference(byId);
           initialize(themedDoc);
           await setCurrentDocumentId(themedDoc.id);
@@ -478,16 +455,29 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
       const current = await loadCurrentDocument();
       if (current) {
+        // alignDocThemeWithPreference
         const themedDoc = alignDocThemeWithPreference(current);
         initialize(themedDoc);
         await setCurrentDocumentId(themedDoc.id);
       } else {
-        const newDoc = {
-          ...blankDocument,
-          style: { ...blankDocument.style, theme: appPreferences.defaultTheme },
+        // No current doc, no ID -> create new blank Sankey doc
+        // We need a way to create a default document here.
+        // For now, let's redirect to home or create a dummy one?
+        // Actually, the store has an initial blank document.
+        const { defaultSankeyData } = await import("@/plugins/sankey");
+        const newDoc: BaseDocument = {
           id: crypto.randomUUID(),
+          title: "Untitled Diagram",
+          diagramType: "sankey",
+          folderId: null,
+          createdAt: Date.now(),
           updatedAt: Date.now(),
+          data: {
+            ...defaultSankeyData,
+            style: { ...defaultSankeyData.style, theme: appPreferences.defaultTheme }
+          } as Record<string, unknown>
         };
+
         initialize(newDoc);
         await upsertDocument(newDoc);
         await setCurrentDocumentId(newDoc.id);
@@ -499,20 +489,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       isMounted = false;
     };
   }, [
-    alignDocThemeWithPreference,
     appPreferences.defaultTheme,
     docId,
     initialize,
     isAppPreferencesReady,
     setHasHydrated,
-    templateId,
+    alignDocThemeWithPreference
   ]);
 
   useEffect(() => {
     if (!hasHydrated) return;
     const timer = window.setTimeout(async () => {
-      await saveCurrentDocument(currentDoc);
-      await saveRecentDocument(currentDoc);
       await upsertDocument(currentDoc);
       await setCurrentDocumentId(currentDoc.id);
     }, 700);
@@ -522,12 +509,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   useEffect(() => {
     if (!hasHydrated) return;
     let mounted = true;
-    Promise.all([loadAllDocuments(), loadRecentTemplateIds(), loadUserTemplates()]).then(
-      ([docs, templateIds, templates]) => {
+    Promise.all([loadAllDocuments()]).then(
+      ([docs]) => {
         if (!mounted) return;
         setAllDocuments(docs);
-        setRecentTemplateIds(templateIds);
-        setUserTemplates(templates);
       },
     );
     return () => {
@@ -537,101 +522,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   useEffect(() => {
     if (typeof document === "undefined") return;
-    document.documentElement.setAttribute("data-theme", currentDoc.style.theme);
-  }, [currentDoc.style.theme]);
+    document.documentElement.setAttribute("data-theme", sankeyData.style.theme);
+  }, [sankeyData.style.theme]);
 
-  const allTemplates = useMemo(() => {
-    return [...templateList, ...userTemplates];
-  }, [userTemplates]);
 
-  const libraryTemplateTagOptions = useMemo(() => {
-    return [
-      "all",
-      ...new Set(
-        allTemplates
-          .flatMap((template) => template.tags ?? [])
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-      ),
-    ];
-  }, [allTemplates]);
-
-  const filteredDocuments = useMemo(() => {
-    const keyword = librarySearch.trim().toLowerCase();
-    if (!keyword) return allDocuments;
-    return allDocuments.filter((doc) => {
-      const title = (doc.title || "Untitled Diagram").toLowerCase();
-      return title.includes(keyword) || doc.format.toLowerCase().includes(keyword);
-    });
-  }, [allDocuments, librarySearch]);
-
-  const recentTemplateIdSet = useMemo(() => {
-    return new Set(recentTemplateIds);
-  }, [recentTemplateIds]);
-
-  const filteredTemplates = useMemo(() => {
-    const keyword = librarySearch.trim().toLowerCase();
-    const bySource = allTemplates.filter((template) => {
-      if (libraryTemplateSourceMode === "all") return true;
-      const isUserTemplate = template.id.startsWith("user-");
-      return libraryTemplateSourceMode === "user" ? isUserTemplate : !isUserTemplate;
-    });
-
-    const byDifficulty =
-      libraryTemplateDifficultyFilter === "all"
-        ? bySource
-        : bySource.filter((template) => template.difficulty === libraryTemplateDifficultyFilter);
-
-    const byTag =
-      libraryTemplateTagFilter === "all"
-        ? byDifficulty
-        : byDifficulty.filter((template) =>
-          (template.tags ?? []).some(
-            (tag) => tag.toLowerCase() === libraryTemplateTagFilter.toLowerCase(),
-          ),
-        );
-
-    if (!keyword) return byTag;
-    return byTag.filter((template) => {
-      return (
-        template.name.toLowerCase().includes(keyword) ||
-        template.category.toLowerCase().includes(keyword) ||
-        template.description.toLowerCase().includes(keyword) ||
-        (template.tags ?? []).some((tag) => tag.toLowerCase().includes(keyword))
-      );
-    });
-  }, [
-    allTemplates,
-    librarySearch,
-    libraryTemplateDifficultyFilter,
-    libraryTemplateSourceMode,
-    libraryTemplateTagFilter,
-  ]);
-
-  const sortedFilteredTemplates = useMemo(() => {
-    const rank = new Map(recentTemplateIds.map((id, index) => [id, index]));
-    return [...filteredTemplates].sort((a, b) => {
-      const rankA = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-      const rankB = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-      if (rankA !== rankB) return rankA - rankB;
-      return a.name.localeCompare(b.name);
-    });
-  }, [filteredTemplates, recentTemplateIds]);
-
-  const selectableUserTemplateIds = useMemo(() => {
-    return sortedFilteredTemplates
-      .filter((template) => template.id.startsWith("user-"))
-      .map((template) => template.id);
-  }, [sortedFilteredTemplates]);
-
-  const effectiveSelectedUserTemplateIds = useMemo(() => {
-    const selectable = new Set(selectableUserTemplateIds);
-    return selectedUserTemplateIds.filter((id) => selectable.has(id));
-  }, [selectedUserTemplateIds, selectableUserTemplateIds]);
-
-  const allVisibleUsersSelected =
-    selectableUserTemplateIds.length > 0 &&
-    selectableUserTemplateIds.every((id) => effectiveSelectedUserTemplateIds.includes(id));
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -733,7 +627,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           id: `shortcut-escape-${Date.now()}`,
           level: "info",
           title: "Selection cleared",
-          description: "閿熸枻鎷疯弫閿? Escape",
+          description: "閿熸枻鎷疯弫? Escape",
         });
         return;
       }
@@ -759,7 +653,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             id: `shortcut-select-all-${Date.now()}`,
             level: "info",
             title: `Selected ${graph.nodes.length} nodes`,
-            description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+A",
+            description: "閿熸枻鎷疯弫? Ctrl/Cmd+A",
           });
           return;
         }
@@ -771,17 +665,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               id: `shortcut-layout-reset-${Date.now()}`,
               level: "success",
               title: "Applied auto-layout: Default",
-              description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L",
+              description: "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L",
             });
             return;
           }
-          const nextPositions = buildLayoutByStrategy(graph, currentDoc.style, autoLayoutStrategy);
+          const nextPositions = buildLayoutByStrategy(graph, sankeyData.style, autoLayoutStrategy);
           setNodePositions(nextPositions);
           setCanvasActionIssue({
             id: `shortcut-layout-${Date.now()}`,
             level: "success",
             title: `Applied auto-layout: ${AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === autoLayoutStrategy)?.label ?? autoLayoutStrategy}`,
-            description: "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L",
+            description: "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L",
           });
           return;
         }
@@ -810,7 +704,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           id: `shortcut-delete-${Date.now()}`,
           level: "warning",
           title: "Cleared selected styles",
-          description: "閿熸枻鎷疯弫閿? Delete / Backspace",
+          description: "閿熸枻鎷疯弫? Delete / Backspace",
         });
       }
     };
@@ -836,7 +730,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     clearSelectedLinkStyle,
     clearSelectedNodeStyles,
     clearSelection,
-    currentDoc.style,
+    sankeyData.style,
     graph,
     redo,
     selectedLinkIndex,
@@ -932,11 +826,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     }
   }, [activeEditorModal, graph.links.length, graph.nodes]);
 
-  const fileHint = useMemo(() => {
-    return currentDoc.format === "json"
-      ? "JSON/DSL: array, { links: [] }, or A [10] B"
-      : "CSV: source,target,value";
-  }, [currentDoc.format]);
 
   const editorIssues = useMemo<AppIssue[]>(() => {
     if (parseError) {
@@ -977,7 +866,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       .trim();
     return base.length > 0 ? base : safeTitle;
   }, [currentDoc.title, exportFileTemplate]);
-  const exportSolidBackground = currentDoc.style.theme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
+  const exportSolidBackground = sankeyData.style.theme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
   const effectiveExportBackground = useMemo(() => {
     if (!svgElement) return exportSolidBackground;
     const container = svgElement.parentElement?.parentElement;
@@ -1220,41 +1109,47 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setEditorModalError(null);
   };
 
-  const openLinkEditor = (index: number, anchor?: { x: number; y: number }) => {
-    const link = graph.links[index];
-    if (!link) return;
-    setSelectedLinkIndex(index);
-    setLinkEditDraft({
-      source: link.source,
-      target: link.target,
-      value: link.value,
-    });
-    setNodeEditDraft(null);
-    setEditorModalError(null);
-    setEditorModalAnchor(anchor ?? null);
-    setActiveEditorModal({ type: "link", index });
-  };
+  const openLinkEditor = useCallback(
+    (index: number, anchor?: { x: number; y: number }) => {
+      const link = graph.links[index];
+      if (!link) return;
+      setSelectedLinkIndex(index);
+      setLinkEditDraft({
+        source: link.source,
+        target: link.target,
+        value: link.value,
+      });
+      setNodeEditDraft(null);
+      setEditorModalError(null);
+      setEditorModalAnchor(anchor ?? null);
+      setActiveEditorModal({ type: "link", index });
+    },
+    [graph.links, setSelectedLinkIndex],
+  );
 
-  const openNodeEditor = (nodeId: string, anchor?: { x: number; y: number }) => {
-    const exists = graph.nodes.some((node) => node.id === nodeId);
-    if (!exists) return;
-    setSelectedNodeIds([nodeId]);
-    setNodeEditDraft({
-      id: nodeId,
-      nextId: nodeId,
-    });
-    setLinkEditDraft(null);
-    setEditorModalError(null);
-    setEditorModalAnchor(anchor ?? null);
-    setActiveEditorModal({ type: "node", id: nodeId });
-  };
+  const openNodeEditor = useCallback(
+    (nodeId: string, anchor?: { x: number; y: number }) => {
+      const exists = graph.nodes.some((node) => node.id === nodeId);
+      if (!exists) return;
+      setSelectedNodeIds([nodeId]);
+      setNodeEditDraft({
+        id: nodeId,
+        nextId: nodeId,
+      });
+      setLinkEditDraft(null);
+      setEditorModalError(null);
+      setEditorModalAnchor(anchor ?? null);
+      setActiveEditorModal({ type: "node", id: nodeId });
+    },
+    [graph.nodes, setSelectedNodeIds],
+  );
 
   const applyNextLinksToEditor = (
     nextLinks: EditableLink[],
     successTitle: string,
     successDescription?: string,
   ) => {
-    const nextText = serializeLinksByFormat(nextLinks, currentDoc.format);
+    const nextText = serializeLinksByFormat(nextLinks, sankeyData.format);
     clearNodePositions();
     setEditorText(nextText);
     if (activeEditorModal?.type === "link") {
@@ -1358,17 +1253,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       pushCanvasActionIssue(
         "success",
         "Applied auto-layout: Default",
-        source === "shortcut" ? "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
+        source === "shortcut" ? "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
       );
       return;
     }
-    const nextPositions = buildLayoutByStrategy(graph, currentDoc.style, strategy);
+    const nextPositions = buildLayoutByStrategy(graph, sankeyData.style, strategy);
     setNodePositions(nextPositions);
     const label = AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === strategy)?.label ?? strategy;
     pushCanvasActionIssue(
       "success",
       `Applied auto-layout: ${label}`,
-      source === "shortcut" ? "閿熸枻鎷疯弫閿? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
+      source === "shortcut" ? "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
     );
   };
 
@@ -1700,12 +1595,18 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   };
 
   const createNewDocument = async () => {
-    const newDoc: SankeyDocument = {
-      ...blankDocument,
-      style: { ...blankDocument.style, theme: appPreferences.defaultTheme },
+    const { defaultSankeyData } = await import("@/plugins/sankey");
+    const newDoc: BaseDocument = {
       id: crypto.randomUUID(),
       title: "Untitled Diagram",
+      diagramType: "sankey",
+      folderId: null,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
+      data: {
+        ...defaultSankeyData,
+        style: { ...defaultSankeyData.style, theme: appPreferences.defaultTheme }
+      } as Record<string, unknown>
     };
     initialize(newDoc);
     await upsertDocument(newDoc);
@@ -1715,11 +1616,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   };
 
   const saveAsCopy = async () => {
-    const copy: SankeyDocument = {
+    const copy: BaseDocument = {
       ...currentDoc,
       id: crypto.randomUUID(),
       title: `${currentDoc.title || "Untitled"} Copy`,
+      diagramType: currentDoc.diagramType,
+      folderId: currentDoc.folderId,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
+      data: JSON.parse(JSON.stringify(currentDoc.data)),
     };
     initialize(copy);
     await upsertDocument(copy);
@@ -1727,164 +1632,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     router.replace(`/editor?doc=${encodeURIComponent(copy.id)}`);
   };
 
-  const saveAsTemplate = async () => {
-    const suggested = `${currentDoc.title || "Untitled"} Template`;
-    const nameInput = await prompt({
-      title: "Template name",
-      defaultValue: suggested,
-      confirmLabel: "Next",
-    });
-    const name = nameInput?.trim();
-    if (!name) return;
 
-    const descriptionInput = await prompt({
-      title: "Template description",
-      defaultValue: "Custom template from current document",
-      confirmLabel: "Next",
-    });
-    if (descriptionInput == null) return;
-    const description = descriptionInput.trim() || "Custom template from current document";
-
-    const categoryInput = await prompt({
-      title: "Template category",
-      defaultValue: "Custom",
-      confirmLabel: "Next",
-    });
-    if (categoryInput == null) return;
-    const category = categoryInput.trim() || "Custom";
-
-    const tagsInput = await prompt({
-      title: "Template tags",
-      message: "Comma separated",
-      defaultValue: "custom",
-      confirmLabel: "Save",
-    });
-    if (tagsInput == null) return;
-
-    const tags = Array.from(
-      new Set(
-        tagsInput
-          .split(",")
-          .map((item) => item.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    );
-
-    const existingTemplates = await loadUserTemplates();
-    const existing = existingTemplates.find(
-      (item) => item.id.startsWith("user-") && item.name.toLowerCase() === name.toLowerCase(),
-    );
-    let templateId = `user-${crypto.randomUUID()}`;
-    if (existing) {
-      const overwrite = await confirm({
-        title: "Overwrite template?",
-        message: `A template named "${name}" already exists.`,
-        confirmLabel: "Overwrite",
-      });
-      if (!overwrite) return;
-      templateId = existing.id;
-    }
-
-    const template: TemplateSummary = {
-      id: templateId,
-      name,
-      category,
-      difficulty: "Medium",
-      description,
-      tags: tags.length > 0 ? tags : undefined,
-      accent: USER_TEMPLATE_ACCENTS[Math.floor(Math.random() * USER_TEMPLATE_ACCENTS.length)],
-      document: {
-        title: currentDoc.title || "Untitled Diagram",
-        format: currentDoc.format,
-        editorText: currentDoc.editorText,
-        style: { ...currentDoc.style },
-        nodePositions: { ...currentDoc.nodePositions },
-        nodeStyles: { ...currentDoc.nodeStyles },
-        linkStyles: { ...currentDoc.linkStyles },
-      },
-    };
-    await upsertUserTemplate(template);
-    await saveRecentTemplate(template.id);
-    const [templateIds, templates] = await Promise.all([
-      loadRecentTemplateIds(),
-      loadUserTemplates(),
-    ]);
-    setRecentTemplateIds(templateIds);
-    setUserTemplates(templates);
-    setLibraryTab("templates");
-    setShowDocuments(true);
-  };
-
-  const applyTemplateFromLibrary = async (nextTemplateId: string) => {
-    setShowDocuments(false);
-    await saveRecentTemplate(nextTemplateId);
-    setRecentTemplateIds(await loadRecentTemplateIds());
-    router.replace(`/editor?template=${encodeURIComponent(nextTemplateId)}`);
-  };
-
-  const deleteTemplateFromLibrary = async (templateId: string) => {
-    const confirmed = await confirm({
-      title: "Delete template?",
-      message: "This action cannot be undone.",
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    await deleteUserTemplate(templateId);
-    const [templateIds, templates] = await Promise.all([
-      loadRecentTemplateIds(),
-      loadUserTemplates(),
-    ]);
-    setRecentTemplateIds(templateIds);
-    setUserTemplates(templates);
-    setSelectedUserTemplateIds((previous) => previous.filter((id) => id !== templateId));
-  };
-
-  const toggleSelectAllVisibleUsers = () => {
-    if (allVisibleUsersSelected) {
-      setSelectedUserTemplateIds((previous) =>
-        previous.filter((id) => !selectableUserTemplateIds.includes(id)),
-      );
-      return;
-    }
-    setSelectedUserTemplateIds((previous) => {
-      const next = new Set(previous);
-      selectableUserTemplateIds.forEach((id) => next.add(id));
-      return [...next];
-    });
-  };
-
-  const removeSelectedUserTemplates = async () => {
-    if (effectiveSelectedUserTemplateIds.length === 0) return;
-    const confirmed = await confirm({
-      title: "Delete selected templates?",
-      message: `This action cannot be undone. Delete ${effectiveSelectedUserTemplateIds.length} selected template(s)?`,
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    await deleteUserTemplates(effectiveSelectedUserTemplateIds);
-    const [templateIds, templates] = await Promise.all([
-      loadRecentTemplateIds(),
-      loadUserTemplates(),
-    ]);
-    setRecentTemplateIds(templateIds);
-    setUserTemplates(templates);
-    setSelectedUserTemplateIds([]);
-  };
-
-  const clearRecentTemplatesFromLibrary = async () => {
-    if (recentTemplateIds.length === 0) return;
-    const confirmed = await confirm({
-      title: "Clear recent template history?",
-      message: "Only the recent history will be removed. Template files remain unchanged.",
-      confirmLabel: "Clear",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    await clearRecentTemplateIds();
-    setRecentTemplateIds([]);
-  };
 
   const deleteCurrentDocument = async () => {
     if (allDocuments.length <= 1) {
@@ -1913,42 +1661,54 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
 
   const workspaceClass =
-    "hero-gradient relative flex h-screen flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]";
-  const headerClass =
-    "glass relative z-[90] flex h-14 items-center justify-between border-b border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_92%,transparent)] px-4 backdrop-blur";
+    "relative flex h-screen flex-col overflow-hidden bg-background text-foreground font-sans";
   const leftPanelClass =
-    "glass absolute left-0 top-0 z-[120] flex h-full flex-col border-r border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_94%,transparent)] shadow-xl transition-transform duration-220 ease-out";
+    "absolute left-2 top-2 bottom-2 z-120 flex flex-col bg-surface sidebar-card transition-all duration-220 ease-out";
   const canvasContainerClass =
-    "relative min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,color-mix(in_srgb,var(--bg-tertiary)_70%,transparent)_0%,var(--bg-secondary)_60%)] p-6";
+    "relative min-w-0 flex-1 bg-surface-light";
+
+  // MD3 Menu text buttons — Google Docs style
   const controlButtonClass =
-    "inline-flex items-center gap-1 rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
-  const controlButtonWideClass =
-    "inline-flex items-center gap-1 rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] px-4 py-1.5 text-xs font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
+    "md3-state-layer inline-flex items-center gap-1 rounded px-2 py-1 text-sm font-medium text-foreground/80 transition-colors";
+  const controlButtonWideClass = controlButtonClass;
+
   const toolbarIconButtonClass =
-    "inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
+    "md3-state-layer inline-flex h-8 w-8 items-center justify-center rounded-full text-foreground/60 hover:text-foreground transition-all";
+
   const documentPopoverClass =
-    "glass absolute left-4 top-14 z-40 w-96 rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_98%,transparent)] p-3 shadow-2xl ring-1 ring-black/5";
+    "absolute left-4 top-[calc(var(--header-row1-height)+var(--header-row2-height)+4px)] z-40 w-96 rounded-xl border border-border bg-surface-container-high p-3 shadow-(--shadow-base) ring-1 ring-black/5";
+
   const rightPanelFieldCompactClass =
-    "mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-[var(--primary)] focus:outline-none";
-  const libraryActionButtonClass = buttonSecondaryTiny;
-  const libraryActionButtonDisabledClass = withDisabled(buttonSecondaryTiny);
-  const libraryDangerButtonClass = buttonDangerSoftTiny;
-  const libraryDangerButtonDisabledClass = withDisabled(buttonDangerSoftTiny);
-  const libraryEmptyStateClass = "rounded-xl border border-dashed border-slate-600 bg-slate-900 px-4 py-8 text-center text-sm text-slate-400";
-  const clearRecentDisabledReason = "No recent template history to clear.";
-  const deleteSelectedDisabledReason = "Select at least one custom template first.";
+    "mt-1 w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors";
+
+
+
+  // MD3 Dropdown menus — rounded-lg, shadow-base, menu-open animation
+  const headerMenuClass =
+    "absolute left-0 top-full mt-1 z-140 min-w-[220px] origin-top-left rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
+  const headerMenuRightClass =
+    "absolute right-0 top-full mt-1 z-140 min-w-[220px] origin-top-right rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
+  const headerMenuItemClass =
+    "md3-state-layer flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-foreground/80 transition-colors";
+  const headerMenuItemActiveClass =
+    "md3-state-layer flex w-full items-center gap-2.5 rounded-lg bg-primary/8 px-3 py-2 text-left text-sm font-semibold text-primary";
+
+  // Floating toggle button for sidebar
+  const floatingIconButtonClass =
+    "pointer-events-auto md3-state-layer inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-container-high text-foreground shadow-(--shadow-sm) transition-all hover:shadow-(--shadow-base) active:scale-95";
+
+  const themeToggleButtonClass =
+    "md3-state-layer inline-flex h-9 w-9 items-center justify-2 rounded-full text-foreground/60 transition-all";
+
+  // MD3 Tonal button for Export
+  const exportButtonClass =
+    "md3-state-layer inline-flex items-center gap-2 rounded-full bg-primary/10 px-5 py-2 text-sm font-medium text-primary transition-all hover:bg-primary/16 hover:shadow-(--shadow-sm) active:scale-[0.97]";
+
+
+  const libraryEmptyStateClass = "rounded-xl border border-dashed border-border bg-[color-mix(in_srgb,var(--surface-container)_60%,transparent)] px-4 py-8 text-center text-sm text-muted";
   const isNarrowViewport = viewportWidth < 1200;
   const leftWorkbenchWidth = 360;
-  const headerMenuClass =
-    "absolute right-0 top-12 z-[140] min-w-[220px] origin-top-right rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_98%,transparent)] p-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100";
-  const headerMenuItemClass =
-    "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]";
-  const headerMenuItemActiveClass =
-    "flex w-full items-center gap-2.5 rounded-xl bg-[var(--primary-subtle)] px-3 py-2 text-left text-sm font-semibold text-[var(--primary-text)] hover:bg-[color:color-mix(in_srgb,var(--primary)_25%,transparent)]";
-  const floatingIconButtonClass =
-    "pointer-events-auto inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:scale-105 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] hover:shadow-md active:scale-95";
-  const themeToggleButtonClass =
-    "inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
+
 
   const toggleLeftWorkbench = () => {
     setLeftWorkbenchMode((current) => {
@@ -1972,6 +1732,62 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     setShowWorkspaceQuickMenu(false);
   };
 
+  // Get the plugin for the current diagram type
+  const plugin = useMemo(() => {
+    return getDiagramPlugin(currentDoc.diagramType);
+  }, [currentDoc.diagramType]);
+
+  // Generic data change handler for the plugin
+  const onPluginDataChange = useCallback(
+    (newData: Record<string, unknown>) => {
+      // Update store state
+      initialize({
+        ...currentDoc,
+        data: newData,
+        updatedAt: Date.now(),
+      });
+
+      // Persist to storage
+      void upsertDocument({
+        ...currentDoc,
+        data: newData,
+        updatedAt: Date.now(),
+      });
+    },
+    [currentDoc, initialize],
+  );
+
+  // Prepare interaction state for the plugin
+  const interactionState = useMemo(() => ({
+    width: 0,
+    height: 0,
+    interactionMode: "select",
+    isSpacePanning,
+    selectedNodeIds: selectedNodeIds || [],
+    selectedLinkIndex: selectedLinkIndex || null,
+    traceMode: traceMode || "none",
+    pulseLinkIndex: pulseLinkIndex || null,
+    pulseNodeId: pulseNodeId || null,
+    renderHints,
+    onSelectionChange: setSelectedNodeIds,
+    onLinkSelectionChange: setSelectedLinkIndex,
+    onLinkEditRequest: openLinkEditor,
+    onNodeEditRequest: openNodeEditor,
+    onZoomChange: setZoomLevel,
+  }), [
+    isSpacePanning,
+    selectedNodeIds,
+    selectedLinkIndex,
+    traceMode,
+    pulseLinkIndex,
+    pulseNodeId,
+    renderHints,
+    openLinkEditor,
+    openNodeEditor,
+    setZoomLevel,
+    setSelectedNodeIds,
+    setSelectedLinkIndex
+  ]);
 
   if (!hasHydrated) {
     return <div className="flex h-screen items-center justify-center text-slate-500">Loading editor...</div>;
@@ -1979,58 +1795,107 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
   return (
     <div className={workspaceClass}>
-      <header className={headerClass}>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 transition hover:bg-[var(--bg-tertiary)]"
-            title="Back to Home"
-            aria-label="Back to Home"
-          >
-            <LayoutTemplate className="h-5 w-5" />
-          </button>
-          <input
-            value={currentDoc.title}
-            onChange={(event) => setTitle(event.target.value)}
-            className="w-72 rounded-lg border-0 bg-transparent px-2 py-1 text-sm font-semibold outline-none ring-0 transition focus:border focus:border-[var(--primary)] focus:bg-[var(--bg-tertiary)]"
-          />
-          <div className="ml-2 flex items-center gap-1">
-            <div className="relative" ref={fileMenuRef}>
+      {/* ===== Two-Row Header (Google Docs style) ===== */}
+      <header className="relative z-90 flex flex-col bg-background border-b border-border">
+        {/* Row 1: Logo + Title + Actions */}
+        <div className="flex h-(--header-row1-height) items-center justify-between px-4">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="md3-state-layer inline-flex h-10 w-10 items-center justify-center rounded-full text-primary transition-colors"
+              title="Back to Home"
+              aria-label="Back to Home"
+            >
+              <LayoutTemplate className="h-6 w-6" />
+            </button>
+
+            <input
+              value={currentDoc.title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="w-72 rounded-lg px-2.5 py-1.5 text-lg font-normal text-foreground placeholder:text-muted outline-none border border-transparent hover:border-border focus:border-primary focus:ring-2 focus:ring-primary/20 focus:bg-background transition-all"
+              placeholder="Untitled Document"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative" ref={exportMenuRef}>
               <button
                 onClick={() => {
-                  setShowFileMenu((value) => !value);
+                  setShowExportMenu((value) => !value);
+                  setShowFileMenu(false);
                   setShowDisplayMenu(false);
                   setShowAutoLayoutMenu(false);
-                  setShowExportMenu(false);
                 }}
-                className={controlButtonClass}
+                className={exportButtonClass}
+                title="Export options"
               >
-                File
-                <ChevronDown className="h-3.5 w-3.5" />
+                <Download className="h-4 w-4" />
+                Export
               </button>
-              {showFileMenu && (
-                <div className={headerMenuClass}>
-                  <button onClick={() => { router.push("/"); setShowFileMenu(false); }} className={headerMenuItemClass}>Home</button>
-                  <button onClick={() => { setShowDocuments((value) => !value); setShowFileMenu(false); }} className={headerMenuItemClass}>Docs</button>
-                  <button onClick={() => { createNewDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Document</button>
-                  <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
-                    <CopyPlus className="h-4 w-4" />Save As
-                  </button>
-                  <button onClick={() => { void saveAsTemplate(); setShowFileMenu(false); }} className={headerMenuItemClass}>
-                    <LayoutTemplate className="h-4 w-4" />Save as Template
-                  </button>
-                  <div className="my-1 border-t border-[var(--border-base)]" />
-                  <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={`${headerMenuItemClass} text-rose-500 hover:text-rose-600`}>
-                    <Trash2 className="h-4 w-4" />Delete Current
-                  </button>
+              {showExportMenu && (
+                <div className={`${headerMenuRightClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
+                  <button onClick={() => { runExportSvg(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export SVG</button>
+                  <button onClick={() => { void runExportPng(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export PNG</button>
+                  <button onClick={() => { runExportHtml(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export HTML</button>
+                  <button onClick={() => { void runExportAll(); setShowExportMenu(false); }} className={`mt-1 ${headerMenuItemActiveClass}`}>Export All</button>
+                  <div className="mt-2 border-t border-border p-2.5 text-xs text-foreground/80 space-y-2">
+                    <label className="block">Width<input type="number" value={exportWidth} onChange={(event) => setExportWidth(Number(event.target.value) || 1200)} className={rightPanelFieldCompactClass} /></label>
+                    <label className="block">Height<input type="number" value={exportHeight} onChange={(event) => setExportHeight(Number(event.target.value) || 700)} className={rightPanelFieldCompactClass} /></label>
+                    <label className="block">Padding<input type="number" value={exportPadding} onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))} className={rightPanelFieldCompactClass} /></label>
+                    <label className="block">PNG Scale<input type="number" min={1} max={4} value={exportPngScale} onChange={(event) => setExportPngScale(Number(event.target.value))} className={rightPanelFieldCompactClass} /></label>
+                    <label className="block">File Template<input value={exportFileTemplate} onChange={(event) => setExportFileTemplate(event.target.value)} className={rightPanelFieldCompactClass} /></label>
+                    <label className="mt-2 inline-flex items-center gap-2"><input type="checkbox" checked={exportTransparentBg} onChange={(event) => setExportTransparentBg(event.target.checked)} className="rounded" />Transparent</label>
+                  </div>
                 </div>
               )}
             </div>
+            <button
+              onClick={() => {
+                const nextTheme = sankeyData.style.theme === "dark" ? "light" : "dark";
+                const currentDefault =
+                  sankeyData.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+                const nextDefault = nextTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+                const nextLabelColor =
+                  sankeyData.style.labelColor === currentDefault ? nextDefault : sankeyData.style.labelColor;
+                patchStyle({ theme: nextTheme, labelColor: nextLabelColor });
+              }}
+              className={themeToggleButtonClass}
+              title={sankeyData.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label={sankeyData.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            >
+              {sankeyData.style.theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="text-xs font-medium text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] px-2 py-1 rounded-full">{Math.round(zoomLevel * 100)}%</div>
+        {/* Row 2: Text Menus */}
+        <div className="flex h-(--header-row2-height) items-center gap-0.5 px-14">
+          <div className="relative" ref={fileMenuRef}>
+            <button
+              onClick={() => {
+                setShowFileMenu((value) => !value);
+                setShowDisplayMenu(false);
+                setShowAutoLayoutMenu(false);
+                setShowExportMenu(false);
+              }}
+              className={`${controlButtonClass} ${showFileMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
+            >
+              File
+            </button>
+            {showFileMenu && (
+              <div className={headerMenuClass}>
+                <button onClick={() => { router.push("/"); setShowFileMenu(false); }} className={headerMenuItemClass}>Home</button>
+                <button onClick={() => { setShowDocuments((value) => !value); setShowFileMenu(false); }} className={headerMenuItemClass}>Docs</button>
+                <button onClick={() => { createNewDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Document</button>
+                <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
+                  <CopyPlus className="h-4 w-4" />Save As
+                </button>
+                <div className="my-1 border-t border-border" />
+                <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={`${headerMenuItemClass} text-red-600 dark:text-red-400`}>
+                  <Trash2 className="h-4 w-4" />Delete Current
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="relative" ref={displayMenuRef}>
             <button
@@ -2040,104 +1905,64 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 setShowAutoLayoutMenu(false);
                 setShowExportMenu(false);
               }}
-              className={controlButtonClass}
+              className={`${controlButtonClass} ${showDisplayMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
               title="Display Settings"
             >
-              <Settings2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Display</span>
-              <ChevronDown className="h-3.5 w-3.5" />
+              Display
             </button>
             {showDisplayMenu && (
               <div className={`${headerMenuClass} w-[280px]`}>
-                <div className="mb-2 flex gap-1 p-1 bg-[var(--bg-tertiary)] rounded-xl">
-                  {(["view", "labels", "layout"] as const).map((tab) => (
+                <div className="mb-2 flex gap-0.5 p-1 bg-surface-container rounded-lg">
+                  <button
+                    onClick={() => setDisplayMenuTab("view")}
+                    className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "view"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted hover:text-foreground"
+                      }`}
+                  >
+                    View
+                  </button>
+                  {plugin?.StylePanel && (
                     <button
-                      key={tab}
-                      onClick={() => setDisplayMenuTab(tab)}
-                      className={`flex-1 rounded-lg py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === tab
-                        ? "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-sm"
-                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                      onClick={() => setDisplayMenuTab("style")}
+                      className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "style" // mapped "labels"/"layout" to "style" for now
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted hover:text-foreground"
                         }`}
                     >
-                      {tab}
+                      Design
                     </button>
-                  ))}
+                  )}
                 </div>
 
                 {displayMenuTab === "view" && (
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     <button onClick={() => { undo(); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-4 w-4" />Undo</button>
                     <button onClick={() => { redo(); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-4 w-4" />Redo</button>
                     <button onClick={() => { syncFromEditor(); }} className={headerMenuItemClass}><Play className="h-4 w-4" />Sync</button>
                     <button onClick={() => { setCanvasResetKey((value) => value + 1); }} className={headerMenuItemClass}>Fit Canvas</button>
-                    <div className="mt-2 border-t border-[var(--border-base)] pt-2 px-2">
-                      <p className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">Trace Mode</p>
+                    <div className="mt-2 border-t border-border pt-2 px-2">
+                      <p className="mb-2 text-xs font-medium text-muted">Trace Mode</p>
                       <div className="grid grid-cols-3 gap-1">
-                        <button onClick={() => setTraceMode("none")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "none" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>None</button>
-                        <button onClick={() => setTraceMode("upstream")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "upstream" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>Up</button>
-                        <button onClick={() => setTraceMode("downstream")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "downstream" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>Down</button>
+                        <button onClick={() => setTraceMode("none")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "none" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>None</button>
+                        <button onClick={() => setTraceMode("upstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "upstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Up</button>
+                        <button onClick={() => setTraceMode("downstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "downstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Down</button>
                       </div>
-                      <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Clear Selection</button>
+                      <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-muted hover:text-foreground transition-colors">Clear Selection</button>
                     </div>
                   </div>
                 )}
 
-                {displayMenuTab === "labels" && (
-                  <div className="space-y-3 px-2 py-1">
-                    <label className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
-                      Show Labels
-                      <input type="checkbox" checked={currentDoc.style.showLabels} onChange={(event) => patchStyle({ showLabels: event.target.checked })} className="rounded border-slate-600 bg-slate-900" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">
-                      Position
-                      <select value={currentDoc.style.labelPosition} onChange={(event) => patchStyle({ labelPosition: event.target.value as "inside" | "outside" })} className={rightPanelFieldCompactClass}>
-                        <option value="outside">Outside</option>
-                        <option value="inside">Inside</option>
-                      </select>
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">
-                      Font Size ({currentDoc.style.labelFontSize}px)
-                      <input type="range" min={10} max={24} value={currentDoc.style.labelFontSize} onChange={(event) => patchStyle({ labelFontSize: Number(event.target.value) })} className="mt-1 w-full" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">
-                      Font Family
-                      <select value={currentDoc.style.labelFontFamily} onChange={(event) => patchStyle({ labelFontFamily: event.target.value as "Roboto" | "Google Sans" | "System Sans" })} className={rightPanelFieldCompactClass}>
-                        <option value="Google Sans">Google Sans</option>
-                        <option value="Roboto">Roboto</option>
-                        <option value="System Sans">System Sans</option>
-                      </select>
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">
-                      Label Color
-                      <div className="mt-1 flex gap-2">
-                        <input type="color" value={currentDoc.style.labelColor} onChange={(event) => patchStyle({ labelColor: event.target.value })} className="h-8 w-full rounded cursor-pointer" />
-                      </div>
-                    </label>
-                  </div>
-                )}
-
-                {displayMenuTab === "layout" && (
-                  <div className="space-y-3 px-2 py-1">
-                    <label className="block text-xs text-[var(--text-secondary)]">Node Width ({currentDoc.style.nodeWidth}px)
-                      <input type="range" min={8} max={42} value={currentDoc.style.nodeWidth} onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })} className="mt-1 w-full" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">Node Padding ({currentDoc.style.nodePadding}px)
-                      <input type="range" min={4} max={50} value={currentDoc.style.nodePadding} onChange={(event) => patchStyle({ nodePadding: Number(event.target.value) })} className="mt-1 w-full" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">Node Radius ({currentDoc.style.nodeRadius}px)
-                      <input type="range" min={0} max={24} value={currentDoc.style.nodeRadius} onChange={(event) => patchStyle({ nodeRadius: Number(event.target.value) })} className="mt-1 w-full" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">Link Opacity ({Math.round(currentDoc.style.linkOpacity * 100)}%)
-                      <input type="range" min={5} max={100} value={Math.round(currentDoc.style.linkOpacity * 100)} onChange={(event) => patchStyle({ linkOpacity: Number(event.target.value) / 100 })} className="mt-1 w-full" />
-                    </label>
-                    <label className="block text-xs text-[var(--text-secondary)]">Curvature
-                      <input type="range" min={0.15} max={0.85} step={0.01} value={currentDoc.style.curvature} onChange={(event) => patchStyle({ curvature: Number(event.target.value) })} className="mt-1 w-full" />
-                    </label>
-                  </div>
+                {displayMenuTab === "style" && plugin?.StylePanel && (
+                  <plugin.StylePanel
+                    data={currentDoc.data}
+                    onDataChange={onPluginDataChange}
+                  />
                 )}
               </div>
             )}
           </div>
+
           <div className="relative" ref={autoLayoutMenuRef}>
             <button
               onClick={() => {
@@ -2146,12 +1971,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                 setShowDisplayMenu(false);
                 setShowExportMenu(false);
               }}
-              className={controlButtonWideClass}
+              className={`${controlButtonWideClass} ${showAutoLayoutMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
               title="Auto-layout options"
             >
-              <WandSparkles className="h-3.5 w-3.5" />
               Auto-layout
-              <ChevronDown className="h-3.5 w-3.5" />
             </button>
             {showAutoLayoutMenu && (
               <div className={headerMenuClass}>
@@ -2163,191 +1986,42 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       applyAutoLayoutStrategy(item.id);
                       setShowAutoLayoutMenu(false);
                     }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs ${autoLayoutStrategy === item.id
-                      ? "bg-[var(--primary-subtle)] text-[var(--primary-text)]"
-                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                    className={`md3-state-layer flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs ${autoLayoutStrategy === item.id
+                      ? "bg-primary/8 text-primary font-semibold"
+                      : "text-foreground/80"
                       }`}
                   >
                     <span>{item.label}</span>
-                    {autoLayoutStrategy === item.id && <span>Current</span>}
+                    {autoLayoutStrategy === item.id && <span className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">Current</span>}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <div className="relative" ref={exportMenuRef}>
-            <button
-              onClick={() => {
-                setShowExportMenu((value) => !value);
-                setShowFileMenu(false);
-                setShowDisplayMenu(false);
-                setShowAutoLayoutMenu(false);
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-[color:color-mix(in_srgb,var(--primary)_45%,transparent)] bg-gradient-to-r from-[var(--primary)] to-[var(--flow-5)] px-3 py-1.5 text-xs font-semibold text-[var(--text-on-primary)] shadow"
-              title="Export options"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Export
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-            {showExportMenu && (
-              <div className={`${headerMenuClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
-                <button onClick={() => { runExportSvg(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export SVG</button>
-                <button onClick={() => { void runExportPng(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export PNG</button>
-                <button onClick={() => { runExportHtml(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export HTML</button>
-                <button onClick={() => { void runExportAll(); setShowExportMenu(false); }} className={`mt-1 ${headerMenuItemActiveClass}`}>Export All</button>
-                <div className="mt-2 border-t border-[var(--border-base)] p-2 text-xs text-[var(--text-secondary)]">
-                  <label className="mb-1 block">Width<input type="number" value={exportWidth} onChange={(event) => setExportWidth(Number(event.target.value) || 1200)} className={rightPanelFieldCompactClass} /></label>
-                  <label className="mb-1 block">Height<input type="number" value={exportHeight} onChange={(event) => setExportHeight(Number(event.target.value) || 700)} className={rightPanelFieldCompactClass} /></label>
-                  <label className="mb-1 block">Padding<input type="number" value={exportPadding} onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))} className={rightPanelFieldCompactClass} /></label>
-                  <label className="mb-1 block">PNG Scale<input type="number" min={1} max={4} value={exportPngScale} onChange={(event) => setExportPngScale(Number(event.target.value))} className={rightPanelFieldCompactClass} /></label>
-                  <label className="mb-1 block">File Template<input value={exportFileTemplate} onChange={(event) => setExportFileTemplate(event.target.value)} className={rightPanelFieldCompactClass} /></label>
-                  <label className="mt-1 inline-flex items-center gap-2"><input type="checkbox" checked={exportTransparentBg} onChange={(event) => setExportTransparentBg(event.target.checked)} />Transparent</label>
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={() => {
-              const nextTheme = currentDoc.style.theme === "dark" ? "light" : "dark";
-              const currentDefault =
-                currentDoc.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-              const nextDefault = nextTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-              const nextLabelColor =
-                currentDoc.style.labelColor === currentDefault ? nextDefault : currentDoc.style.labelColor;
-              patchStyle({ theme: nextTheme, labelColor: nextLabelColor });
-            }}
-            className={themeToggleButtonClass}
-            title={currentDoc.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            aria-label={currentDoc.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          >
-            {currentDoc.style.theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
         </div>
       </header>
 
       {showDocuments && (
         <div className={documentPopoverClass}>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="grid grid-cols-2 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_90%,transparent)] p-1 text-[11px]">
-              <button
-                onClick={() => setLibraryTab("documents")}
-                className={`rounded-md px-2 py-1 font-medium ${libraryTab === "documents"
-                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
-                  : "text-[var(--text-tertiary)]"
-                  }`}
-              >
-                Documents
-              </button>
-              <button
-                onClick={() => setLibraryTab("templates")}
-                className={`rounded-md px-2 py-1 font-medium ${libraryTab === "templates"
-                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
-                  : "text-[var(--text-tertiary)]"
-                  }`}
-              >
-                Templates
-              </button>
-            </div>
-            {libraryTab === "documents" ? (
-              <button
-                onClick={deleteCurrentDocument}
-                className={libraryDangerButtonClass}
-              >
-                Delete Current
-              </button>
-            ) : (
-              <button
-                onClick={() => void saveAsTemplate()}
-                className={libraryActionButtonClass}
-              >
-                Save Current as Template
-              </button>
-            )}
+            <span className="text-xs font-semibold uppercase text-muted">All Documents</span>
           </div>
           <input
             value={librarySearch}
             onChange={(event) => setLibrarySearch(event.target.value)}
-            placeholder={libraryTab === "documents" ? "Search documents" : "Search templates"}
-            className="mb-2 w-full rounded-md border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_95%,transparent)] px-2 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--primary)]"
+            placeholder={"Search documents"}
+            className="mb-2 w-full rounded-md border border-border bg-[color-mix(in_srgb,var(--bg-elevated)_95%,transparent)] px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
           />
-          {libraryTab === "templates" && (
-            <div className="mb-2 space-y-2 rounded-md border border-slate-700 bg-slate-900/70 p-2">
-              <div className="flex items-center gap-2">
-                <select
-                  value={libraryTemplateSourceMode}
-                  onChange={(event) =>
-                    setLibraryTemplateSourceMode(event.target.value as "all" | "user" | "builtin")
-                  }
-                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
-                >
-                  <option value="all">All sources</option>
-                  <option value="user">My templates</option>
-                  <option value="builtin">Built-in</option>
-                </select>
-                <select
-                  value={libraryTemplateDifficultyFilter}
-                  onChange={(event) =>
-                    setLibraryTemplateDifficultyFilter(
-                      event.target.value as "all" | "Easy" | "Medium" | "Advanced",
-                    )
-                  }
-                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
-                >
-                  <option value="all">All levels</option>
-                  <option value="Easy">Easy</option>
-                  <option value="Medium">Medium</option>
-                  <option value="Advanced">Advanced</option>
-                </select>
-                <select
-                  value={libraryTemplateTagFilter}
-                  onChange={(event) => setLibraryTemplateTagFilter(event.target.value)}
-                  className="h-7 min-w-[110px] rounded border border-slate-600 bg-slate-900 px-2 text-[11px] text-slate-200"
-                >
-                  {libraryTemplateTagOptions.map((tag) => (
-                    <option key={`editor-library-tag-${tag}`} value={tag}>
-                      Tag: {tag}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void clearRecentTemplatesFromLibrary()}
-                  disabled={recentTemplateIds.length === 0}
-                  className={libraryActionButtonDisabledClass}
-                  title={recentTemplateIds.length === 0 ? clearRecentDisabledReason : "Clear recent template history"}
-                >
-                  Clear recent
-                </button>
-                <button
-                  onClick={() => void removeSelectedUserTemplates()}
-                  disabled={effectiveSelectedUserTemplateIds.length === 0}
-                  className={libraryDangerButtonDisabledClass}
-                  title={effectiveSelectedUserTemplateIds.length === 0 ? deleteSelectedDisabledReason : "Delete selected templates"}
-                >
-                  Delete selected ({effectiveSelectedUserTemplateIds.length})
-                </button>
-                {libraryTemplateSourceMode === "user" && selectableUserTemplateIds.length > 0 && (
-                  <button
-                    onClick={toggleSelectAllVisibleUsers}
-                    className={libraryActionButtonClass}
-                  >
-                    {allVisibleUsersSelected ? "Clear selection" : "Select all"}
-                  </button>
-                )}
-              </div>
-            </div>
 
-          )}
           <div className="max-h-72 space-y-1 overflow-auto pr-1">
-            {libraryTab === "documents" ? (
-              filteredDocuments.length === 0 ? (
-                <p className={`${libraryEmptyStateClass} type-caption`}>
-                  No documents found.
-                </p>
-              ) : (
-                filteredDocuments.map((doc) => (
+            {filteredDocuments.length === 0 ? (
+              <p className={`${libraryEmptyStateClass} type-caption`}>
+                No documents found.
+              </p>
+            ) : (
+              filteredDocuments.map((doc) => {
+                const docData = doc.data as unknown as SankeyData;
+                return (
                   <button
                     key={doc.id}
                     onClick={() => openDocumentById(doc.id)}
@@ -2358,84 +2032,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   >
                     <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
                     <p className="mt-0.5 text-[10px] text-slate-500">
-                      {doc.format.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
+                      {docData.format?.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
                     </p>
                   </button>
-                ))
-              )
-            ) : sortedFilteredTemplates.length === 0 ? (
-              <p className={`${libraryEmptyStateClass} type-caption`}>
-                No templates found.
-              </p>
-            ) : (
-              sortedFilteredTemplates.map((template) => {
-                const isUserTemplate = template.id.startsWith("user-");
-                const isRecentTemplate = recentTemplateIdSet.has(template.id);
-                return (
-                  <div key={template.id} className="rounded-lg border px-2 py-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <button
-                        onClick={() => void applyTemplateFromLibrary(template.id)}
-                        className="flex-1 text-left"
-                      >
-                        <p className="text-xs font-medium text-slate-100">{template.name}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-1">
-                          <span className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] font-medium text-slate-300">
-                            {template.difficulty}
-                          </span>
-                          <span className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] font-medium text-slate-300">
-                            {isUserTemplate ? "My template" : "Built-in"}
-                          </span>
-                          {isRecentTemplate && (
-                            <span className="rounded border border-indigo-400/40 bg-indigo-500/18 px-1.5 py-0.5 text-[10px] font-medium text-indigo-100">
-                              Recent
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-1 text-[10px] text-slate-500">Category: {template.category}</p>
-                        <p className="mt-1 line-clamp-2 text-[10px] text-slate-500">{template.description}</p>
-                        {(template.tags ?? []).length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {(template.tags ?? []).slice(0, 3).map((tag) => (
-                              <span
-                                key={`${template.id}-library-tag-${tag}`}
-                                className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300"
-                              >
-                                #{tag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </button>
-                      {isUserTemplate && (
-                        <div className="flex items-center gap-1">
-                          <label className="inline-flex items-center gap-1 rounded border border-slate-600 px-1.5 py-1 text-[10px] text-slate-300 hover:bg-slate-800">
-                            <input
-                              type="checkbox"
-                              checked={effectiveSelectedUserTemplateIds.includes(template.id)}
-                              onChange={(event) => {
-                                const checked = event.target.checked;
-                                setSelectedUserTemplateIds((previous) => {
-                                  if (checked) {
-                                    if (previous.includes(template.id)) return previous;
-                                    return [...previous, template.id];
-                                  }
-                                  return previous.filter((id) => id !== template.id);
-                                });
-                              }}
-                            />
-                            Select
-                          </label>
-                          <button
-                            onClick={() => void deleteTemplateFromLibrary(template.id)}
-                            className="rounded border border-rose-400/40 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/15"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 );
               })
             )}
@@ -2448,12 +2047,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             type="button"
             aria-label="Close workspace overlays"
             onClick={closeWorkspaceOverlays}
-            className="absolute inset-0 z-[110] bg-[color:color-mix(in_srgb,var(--bg-overlay)_38%,transparent)] backdrop-blur-[1px]"
+            className="absolute inset-0 z-110 bg-[color-mix(in_srgb,var(--bg-overlay)_38%,transparent)] backdrop-blur-[1px]"
           />
         )}
 
         {isNarrowViewport ? (
-          <div className="pointer-events-none absolute right-2 top-3 z-[121]" ref={workspaceQuickMenuRef}>
+          <div className="pointer-events-none absolute right-2 top-3 z-121" ref={workspaceQuickMenuRef}>
             <button
               type="button"
               onClick={() => setShowWorkspaceQuickMenu((value) => !value)}
@@ -2470,7 +2069,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                     toggleLeftWorkbench();
                     setShowWorkspaceQuickMenu(false);
                   }}
-                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-(--text-secondary) hover:bg-bg-tertiary"
                 >
                   <span>{leftWorkbenchVisible ? "Hide Workbench" : "Show Workbench"}</span>
                   <span>Shift+Tab</span>
@@ -2482,7 +2081,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       toggleLeftWorkbenchSize();
                       setShowWorkspaceQuickMenu(false);
                     }}
-                    className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                    className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs text-(--text-secondary) hover:bg-bg-tertiary"
                   >
                     <span>{leftWorkbenchMode === "expanded" ? "Compact Width" : "Expand Width"}</span>
                     <span>Left</span>
@@ -2493,11 +2092,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </div>
         ) : (
           <>
-            <div className="pointer-events-none absolute left-0 top-1/2 z-[121] flex -translate-y-1/2 flex-col gap-2 pl-2">
+            <div className="pointer-events-none absolute left-0 top-1/2 z-121 flex -translate-y-1/2 flex-col gap-2 pl-2">
               <button
                 type="button"
                 onClick={toggleLeftWorkbench}
-                className={`${floatingIconButtonClass} ${!leftWorkbenchVisible ? "animate-pulse-subtle border-[var(--primary)] text-[var(--primary)]" : ""}`}
+                className={`${floatingIconButtonClass} ${!leftWorkbenchVisible ? "animate-pulse-subtle border-primary text-primary" : ""}`}
                 title={leftWorkbenchVisible ? "Collapse workbench (Shift+Tab)" : "Open workbench (Shift+Tab)"}
               >
                 {leftWorkbenchVisible ? <ChevronLeft className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
@@ -2509,109 +2108,133 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         )}
 
         <aside
-          className={`${leftPanelClass} ${leftWorkbenchVisible ? "translate-x-0" : "-translate-x-full"} flex flex-col`}
+          className={`${leftPanelClass} ${leftWorkbenchVisible ? "translate-x-0 animate-sidebar-in" : "-translate-x-[calc(100%+16px)]"}`}
           style={{ width: leftWorkbenchWidth }}
         >
-          {/* Sidebar Toolbar */}
-          <div className="flex h-12 w-full items-center justify-between border-b border-[var(--border-base)] bg-[var(--bg-elevated)] px-3 shadow-sm z-10">
-            <div className="flex items-center gap-2">
-              <select
-                value={currentDoc.format}
-                onChange={(e) => {
-                  const newFormat = e.target.value as DataFormat;
-                  const text = currentDoc.editorText; // Get current text
-                  // Ideally we'd try to convert, but for now just switch mode.
-                  // The storage logic or parent might handle conversion if implemented,
-                  // but usually it just interprets the text differently.
-                  const newDoc = { ...currentDoc, format: newFormat };
-                  void upsertDocument(newDoc).then(() => {
-                    setCurrentDocumentId(newDoc.id);
-                  });
-                }}
-                className="h-8 rounded-lg border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 text-xs font-medium text-[var(--text-primary)] focus:border-[var(--primary)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
-                title="Data Format"
-              >
-                <option value="sankey">Sankey DSL</option>
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                ref={rawImportInputRef}
-                className="hidden"
-                type="file"
-                accept=".csv,.json,.txt,.dsl"
-                onChange={onRawFileUpload}
-              />
-              <button
-                onClick={() => rawImportInputRef.current?.click()}
-                className={toolbarIconButtonClass}
-                title="Import File"
-              >
-                <FileUp className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => {
-                  const content = currentDoc.editorText;
-                  const mime = currentDoc.format === "json" ? "application/json" : "text/plain";
-                  const ext = currentDoc.format === "json" ? "json" : currentDoc.format === "csv" ? "csv" : "dsl";
-                  downloadFile(`sankey-data.${ext}`, mime, content);
-                }}
-                className={toolbarIconButtonClass}
-                title="Download Source"
-              >
-                <FileDown className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="relative flex-1 min-h-0 bg-[var(--bg-secondary)]"
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDragOver(true);
-            }}
-            onDragLeave={() => setIsDragOver(false)}
-            onDrop={onRawDrop}
-          >
-            {isDragOver && (
-              <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--primary)]/10 backdrop-blur-[1px] border-2 border-dashed border-[var(--primary)] m-2 rounded-xl">
-                <div className="pointer-events-none rounded-xl bg-[var(--bg-elevated)] px-4 py-2 font-medium text-[var(--primary)] shadow-lg">
-                  Drop file to import
+          {plugin?.editorMode === "visual" ? (
+            plugin.ToolPanel ? (
+              <plugin.ToolPanel data={currentDoc.data} onDataChange={onPluginDataChange} />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center p-4 text-center text-sm text-muted">
+                <p>Visual editing mode active</p>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Sidebar Header — Format selector + actions */}
+              <div className="flex flex-col gap-2 border-b border-border px-3 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-foreground">Source</span>
+                  <div className="flex items-center gap-0.5">
+                    <input
+                      ref={rawImportInputRef}
+                      className="hidden"
+                      type="file"
+                      accept=".csv,.json,.txt,.dsl"
+                      onChange={onRawFileUpload}
+                    />
+                    <button
+                      onClick={() => rawImportInputRef.current?.click()}
+                      className={toolbarIconButtonClass}
+                      title="Import File"
+                    >
+                      <FileUp className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const content = sankeyData.editorText;
+                        const mime = sankeyData.format === "json" ? "application/json" : "text/plain";
+                        const ext = sankeyData.format === "json" ? "json" : sankeyData.format === "csv" ? "csv" : "dsl";
+                        downloadFile(`sankey-data.${ext}`, mime, content);
+                      }}
+                      className={toolbarIconButtonClass}
+                      title="Download Source"
+                    >
+                      <FileDown className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                {/* MD3 Segmented Button — Format Selector */}
+                <div className="flex rounded-full border border-border p-0.5 bg-surface-container">
+                  {([
+                    { id: "sankey", label: "DSL" },
+                    { id: "json", label: "JSON" },
+                    { id: "csv", label: "CSV" },
+                  ] as const).map((fmt) => (
+                    <button
+                      key={fmt.id}
+                      onClick={() => {
+                        const newDoc = {
+                          ...currentDoc,
+                          data: { ...sankeyData, format: fmt.id as DataFormat } as unknown as Record<string, unknown>
+                        };
+                        void upsertDocument(newDoc).then(() => {
+                          setCurrentDocumentId(newDoc.id);
+                        });
+                      }}
+                      className={`md3-segmented-btn flex-1 ${sankeyData.format === fmt.id ? "active" : ""}`}
+                    >
+                      {fmt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
 
-            <SankeyMonacoEditor
-              value={currentDoc.editorText}
-              format={currentDoc.format}
-              theme={currentDoc.style.theme}
-              onChange={setEditorText}
-              marker={parseIssue}
-            />
-          </div>
+              {/* Editor Area */}
+              <div
+                className="relative flex-1 min-h-0 bg-surface"
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragOver(true);
+                }}
+                onDragLeave={() => setIsDragOver(false)}
+                onDrop={onRawDrop}
+              >
+                {isDragOver && (
+                  <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 backdrop-blur-[1px] border-2 border-dashed border-primary m-2 rounded-xl">
+                    <div className="pointer-events-none rounded-xl bg-surface-container-high px-4 py-2 font-medium text-primary shadow-lg">
+                      Drop file to import
+                    </div>
+                  </div>
+                )}
 
-          {/* Footer / Status Bar */}
-          <div className="border-t border-[var(--border-base)] bg-[var(--bg-elevated)]">
-            <div className="flex items-center justify-between px-3 py-1.5">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
-                <input
-                  type="checkbox"
-                  checked={autoSync}
-                  onChange={(event) => setAutoSync(event.target.checked)}
-                  className="rounded border-[var(--border-base)] bg-[var(--bg-secondary)] text-[var(--primary)] focus:ring-[var(--primary)]"
+                <SankeyMonacoEditor
+                  value={sankeyData.editorText}
+                  format={sankeyData.format}
+                  theme={sankeyData.style.theme}
+                  onChange={setEditorText}
+                  marker={parseIssue}
                 />
-                Auto-sync
-              </label>
-              {/* Could put issue count here or similar status */}
-            </div>
-            {(editorIssues.length > 0) && (
-              <div className="border-t border-[var(--border-base)]">
-                <IssueCenter issues={editorIssues} className="px-4 py-3" />
               </div>
-            )}
-          </div>
+
+              {/* Footer / Status Bar */}
+              <div className="border-t border-border">
+                <div className="flex items-center justify-between px-3 py-2.5">
+                  <label className="md3-state-layer flex cursor-pointer items-center gap-2.5 rounded-full px-2 py-1 text-xs text-muted hover:text-foreground transition-colors">
+                    <div className="relative">
+                      <input
+                        type="checkbox"
+                        checked={autoSync}
+                        onChange={(event) => setAutoSync(event.target.checked)}
+                        className="peer sr-only"
+                      />
+                      <div className={`h-5 w-9 rounded-full transition-colors ${autoSync ? "bg-primary" : "bg-border"}`} />
+                      <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${autoSync ? "translate-x-4" : ""}`} />
+                    </div>
+                    Auto-sync
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px] font-medium text-muted">
+                    <span>{Math.round(zoomLevel * 100)}%</span>
+                  </div>
+                </div>
+                {(editorIssues.length > 0) && (
+                  <div className="border-t border-border">
+                    <IssueCenter issues={editorIssues} className="px-3 py-2.5" />
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </aside>
 
         <main className={canvasContainerClass}>
@@ -2621,29 +2244,21 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             transition={{ duration: performanceProfile.shouldReduceMotion ? 0.03 : 0.35 }}
             className="h-full"
           >
-            <SankeyCanvas
-              key={canvasResetKey}
-              graph={graph}
-              style={currentDoc.style}
-              nodePositions={currentDoc.nodePositions}
-              nodeStyles={currentDoc.nodeStyles}
-              linkStyles={currentDoc.linkStyles}
-              renderHints={renderHints}
-              interactionMode="select"
-              isSpacePanning={isSpacePanning}
-              selectedNodeIds={selectedNodeIds}
-              selectedLinkIndex={selectedLinkIndex}
-              traceMode={traceMode}
-              onNodePositionChange={setNodePosition}
-              onSelectionChange={setSelectedNodeIds}
-              onLinkSelectionChange={setSelectedLinkIndex}
-              onLinkEditRequest={openLinkEditor}
-              onNodeEditRequest={openNodeEditor}
-              pulseLinkIndex={pulseLinkIndex}
-              pulseNodeId={pulseNodeId}
-              onZoomChange={setZoomLevel}
-              onSvgReady={setSvgElement}
-            />
+            {plugin && plugin.Canvas ? (
+              <plugin.Canvas
+                key={canvasResetKey}
+                data={currentDoc.data}
+                width={CANVAS_BASE_WIDTH}
+                height={CANVAS_BASE_HEIGHT}
+                onDataChange={onPluginDataChange}
+                interactionState={interactionState}
+                onSvgReady={setSvgElement}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-muted">
+                {plugin ? "Initializing Canvas..." : "Unknown diagram type"}
+              </div>
+            )}
           </motion.div>
         </main>
 

@@ -14,9 +14,13 @@ import {
   Moon,
   Play,
   Redo2,
-  Sun,
+  Settings2,
+  Trash2,
   Undo2,
   WandSparkles,
+  Sun,
+  FileUp,
+  FileDown,
 } from "lucide-react";
 import { sankey, SankeyGraph as D3SankeyGraph } from "d3-sankey";
 import { parseSankeyTextDetailed } from "@/lib/parse";
@@ -304,7 +308,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(
     DEFAULT_APP_PREFERENCES,
   );
-  const [activeTab, setActiveTab] = useState<"source" | "editor">("editor");
   const [showDocuments, setShowDocuments] = useState(false);
   const [libraryTab, setLibraryTab] = useState<"documents" | "templates">("documents");
   const [librarySearch, setLibrarySearch] = useState("");
@@ -320,8 +323,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
   const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [sourceNotice, setSourceNotice] = useState<string>("");
-  const [sourceError, setSourceError] = useState<string>("");
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [canvasResetKey, setCanvasResetKey] = useState(0);
@@ -356,16 +357,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [pulseLinkIndex, setPulseLinkIndex] = useState<number | null>(null);
   const [pulseNodeId, setPulseNodeId] = useState<string | null>(null);
   const [showFileMenu, setShowFileMenu] = useState(false);
-  const [showViewMenu, setShowViewMenu] = useState(false);
-  const [showLabelsMenu, setShowLabelsMenu] = useState(false);
-  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [showAutoLayoutMenu, setShowAutoLayoutMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showDisplayMenu, setShowDisplayMenu] = useState(false);
+  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "labels" | "layout">("view");
   const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
+
+
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
-  const viewMenuRef = useRef<HTMLDivElement | null>(null);
-  const labelsMenuRef = useRef<HTMLDivElement | null>(null);
-  const layoutMenuRef = useRef<HTMLDivElement | null>(null);
+  const displayMenuRef = useRef<HTMLDivElement | null>(null);
   const autoLayoutMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceQuickMenuRef = useRef<HTMLDivElement | null>(null);
@@ -586,10 +586,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       libraryTemplateTagFilter === "all"
         ? byDifficulty
         : byDifficulty.filter((template) =>
-            (template.tags ?? []).some(
-              (tag) => tag.toLowerCase() === libraryTemplateTagFilter.toLowerCase(),
-            ),
-          );
+          (template.tags ?? []).some(
+            (tag) => tag.toLowerCase() === libraryTemplateTagFilter.toLowerCase(),
+          ),
+        );
 
     if (!keyword) return byTag;
     return byTag.filter((template) => {
@@ -639,14 +639,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       if (fileMenuRef.current && !fileMenuRef.current.contains(target)) {
         setShowFileMenu(false);
       }
-      if (viewMenuRef.current && !viewMenuRef.current.contains(target)) {
-        setShowViewMenu(false);
-      }
-      if (labelsMenuRef.current && !labelsMenuRef.current.contains(target)) {
-        setShowLabelsMenu(false);
-      }
-      if (layoutMenuRef.current && !layoutMenuRef.current.contains(target)) {
-        setShowLayoutMenu(false);
+      if (displayMenuRef.current && !displayMenuRef.current.contains(target)) {
+        setShowDisplayMenu(false);
       }
       if (autoLayoutMenuRef.current && !autoLayoutMenuRef.current.contains(target)) {
         setShowAutoLayoutMenu(false);
@@ -710,12 +704,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       const lower = event.key.toLowerCase();
       if (
         event.key === "Escape" &&
-        (showFileMenu || showViewMenu || showLabelsMenu || showLayoutMenu || showAutoLayoutMenu || showExportMenu)
+        (showFileMenu || showDisplayMenu || showAutoLayoutMenu || showExportMenu)
       ) {
         setShowFileMenu(false);
-        setShowViewMenu(false);
-        setShowLabelsMenu(false);
-        setShowLayoutMenu(false);
+        setShowDisplayMenu(false);
         setShowAutoLayoutMenu(false);
         setShowExportMenu(false);
         event.preventDefault();
@@ -795,12 +787,12 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         }
         if (lower === "1") {
           event.preventDefault();
-          setActiveTab("source");
+          // setActiveTab("source"); // Removed
           return;
         }
         if (lower === "2") {
           event.preventDefault();
-          setActiveTab("editor");
+          // setActiveTab("editor"); // Removed
           return;
         }
       }
@@ -855,9 +847,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     showAutoLayoutMenu,
     showExportMenu,
     showFileMenu,
-    showLabelsMenu,
-    showLayoutMenu,
-    showViewMenu,
+    showDisplayMenu,
     leftWorkbenchVisible,
     undo,
   ]);
@@ -947,27 +937,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       ? "JSON/DSL: array, { links: [] }, or A [10] B"
       : "CSV: source,target,value";
   }, [currentDoc.format]);
-
-  const sourceIssues = useMemo<AppIssue[]>(() => {
-    const issues: AppIssue[] = [];
-    if (sourceError) {
-      issues.push({
-        id: "source-error",
-        level: "error",
-        title: "Import issue",
-        description: sourceError,
-      });
-    }
-    if (sourceNotice) {
-      issues.push({
-        id: "source-notice",
-        level: "success",
-        title: "Import updated",
-        description: sourceNotice,
-      });
-    }
-    return issues;
-  }, [sourceError, sourceNotice]);
 
   const editorIssues = useMemo<AppIssue[]>(() => {
     if (parseError) {
@@ -1634,8 +1603,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const applyRawInputToEditor = (text: string) => {
     const candidate = text.trim();
     if (!candidate) {
-      setSourceError("Input is empty.");
-      setSourceNotice("");
+      pushCanvasActionIssue("error", "Import failed", "Input is empty.");
       return;
     }
 
@@ -1668,10 +1636,11 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       detected = "CSV";
     } else {
       const issue = jsonResult.issue ?? csvResult.issue;
-      setSourceError(
+      pushCanvasActionIssue(
+        "error",
+        "Import failed",
         `${issue.message}${issue.line ? ` (Ln ${issue.line}, Col ${issue.column})` : ""}`,
       );
-      setSourceNotice("");
       return;
     }
 
@@ -1680,18 +1649,17 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     clearNodePositions();
     setFormat(formatToApply);
     setEditorText(candidate);
-    setSourceError("");
-    setSourceNotice(
+    pushCanvasActionIssue(
+      "success",
+      "Import successful",
       `Detected ${detected}: ${parseResult.graph.nodes.length} nodes, ${parseResult.graph.links.length} links.`,
     );
-    setActiveTab("editor");
   };
 
   const importRawFile = async (file: File) => {
     const lower = file.name.toLowerCase();
     if (!lower.endsWith(".csv") && !lower.endsWith(".json") && !lower.endsWith(".txt") && !lower.endsWith(".dsl")) {
-      setSourceError("Only .csv, .json, .txt, .dsl are supported in quick import.");
-      setSourceNotice("");
+      pushCanvasActionIssue("error", "Import failed", "Only .csv, .json, .txt, .dsl are supported in quick import.");
       return;
     }
     const text = await file.text();
@@ -1704,8 +1672,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     try {
       await importRawFile(file);
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Failed to parse file");
-      setSourceNotice("");
+      pushCanvasActionIssue("error", "Import failed", error instanceof Error ? error.message : "Failed to parse file");
     } finally {
       if (rawImportInputRef.current) rawImportInputRef.current.value = "";
     }
@@ -1719,8 +1686,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     try {
       await importRawFile(file);
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Failed to parse dropped file");
-      setSourceNotice("");
+      pushCanvasActionIssue("error", "Import failed", error instanceof Error ? error.message : "Failed to parse dropped file");
     }
   };
 
@@ -1945,7 +1911,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     router.replace(`/editor?doc=${encodeURIComponent(nextDoc.id)}`);
   };
 
-  const isDarkTheme = currentDoc.style.theme === "dark";
+
   const workspaceClass =
     "hero-gradient relative flex h-screen flex-col overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)]";
   const headerClass =
@@ -1955,32 +1921,34 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const canvasContainerClass =
     "relative min-w-0 flex-1 bg-[radial-gradient(circle_at_20%_20%,color-mix(in_srgb,var(--bg-tertiary)_70%,transparent)_0%,var(--bg-secondary)_60%)] p-6";
   const controlButtonClass =
-    "inline-flex items-center gap-1 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_84%,transparent)] px-2 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+    "inline-flex items-center gap-1 rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
   const controlButtonWideClass =
-    "inline-flex items-center gap-1 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_84%,transparent)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+    "inline-flex items-center gap-1 rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] px-4 py-1.5 text-xs font-medium text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
+  const toolbarIconButtonClass =
+    "inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
   const documentPopoverClass =
-    "glass absolute left-4 top-16 z-40 w-96 rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_96%,transparent)] p-3 shadow-xl";
+    "glass absolute left-4 top-14 z-40 w-96 rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_98%,transparent)] p-3 shadow-2xl ring-1 ring-black/5";
   const rightPanelFieldCompactClass =
-    "mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] text-slate-100";
+    "mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-[var(--primary)] focus:outline-none";
   const libraryActionButtonClass = buttonSecondaryTiny;
   const libraryActionButtonDisabledClass = withDisabled(buttonSecondaryTiny);
   const libraryDangerButtonClass = buttonDangerSoftTiny;
   const libraryDangerButtonDisabledClass = withDisabled(buttonDangerSoftTiny);
-  const libraryEmptyStateClass = "rounded-lg border border-dashed border-slate-600 bg-slate-900 px-2 py-3 text-center text-xs text-slate-400";
+  const libraryEmptyStateClass = "rounded-xl border border-dashed border-slate-600 bg-slate-900 px-4 py-8 text-center text-sm text-slate-400";
   const clearRecentDisabledReason = "No recent template history to clear.";
   const deleteSelectedDisabledReason = "Select at least one custom template first.";
   const isNarrowViewport = viewportWidth < 1200;
-  const leftWorkbenchWidth = leftWorkbenchMode === "expanded" ? 420 : 320;
+  const leftWorkbenchWidth = 360;
   const headerMenuClass =
-    "absolute right-0 top-10 z-[140] min-w-[180px] rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_97%,transparent)] p-1 shadow-xl";
+    "absolute right-0 top-12 z-[140] min-w-[220px] origin-top-right rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_98%,transparent)] p-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100";
   const headerMenuItemClass =
-    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]";
+    "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]";
   const headerMenuItemActiveClass =
-    "flex w-full items-center gap-2 rounded-lg bg-[var(--primary-subtle)] px-2 py-1.5 text-left text-xs font-semibold text-[var(--primary-text)] hover:bg-[color:color-mix(in_srgb,var(--primary)_20%,transparent)]";
+    "flex w-full items-center gap-2.5 rounded-xl bg-[var(--primary-subtle)] px-3 py-2 text-left text-sm font-semibold text-[var(--primary-text)] hover:bg-[color:color-mix(in_srgb,var(--primary)_25%,transparent)]";
   const floatingIconButtonClass =
-    "pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_94%,transparent)] text-[var(--text-secondary)] shadow-lg backdrop-blur hover:bg-[var(--bg-tertiary)]";
+    "pointer-events-auto inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:scale-105 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] hover:shadow-md active:scale-95";
   const themeToggleButtonClass =
-    "inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_90%,transparent)] text-[var(--text-secondary)] shadow hover:bg-[var(--bg-tertiary)]";
+    "inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border-base)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] shadow-sm transition-all hover:bg-[var(--bg-tertiary)] hover:shadow-md hover:text-[var(--text-primary)] active:scale-95";
 
   const toggleLeftWorkbench = () => {
     setLeftWorkbenchMode((current) => {
@@ -2032,9 +2000,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               <button
                 onClick={() => {
                   setShowFileMenu((value) => !value);
-                  setShowViewMenu(false);
-                  setShowLabelsMenu(false);
-                  setShowLayoutMenu(false);
+                  setShowDisplayMenu(false);
                   setShowAutoLayoutMenu(false);
                   setShowExportMenu(false);
                 }}
@@ -2049,142 +2015,135 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   <button onClick={() => { setShowDocuments((value) => !value); setShowFileMenu(false); }} className={headerMenuItemClass}>Docs</button>
                   <button onClick={() => { createNewDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Document</button>
                   <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
-                    <CopyPlus className="h-3.5 w-3.5" />Save As
+                    <CopyPlus className="h-4 w-4" />Save As
                   </button>
                   <button onClick={() => { void saveAsTemplate(); setShowFileMenu(false); }} className={headerMenuItemClass}>
-                    <LayoutTemplate className="h-3.5 w-3.5" />Save as Template
+                    <LayoutTemplate className="h-4 w-4" />Save as Template
                   </button>
-                  <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>Delete Current</button>
-                </div>
-              )}
-            </div>
-            <div className="relative" ref={viewMenuRef}>
-              <button
-                onClick={() => {
-                  setShowViewMenu((value) => !value);
-                  setShowFileMenu(false);
-                  setShowLabelsMenu(false);
-                  setShowLayoutMenu(false);
-                  setShowAutoLayoutMenu(false);
-                  setShowExportMenu(false);
-                }}
-                className={controlButtonClass}
-              >
-                View
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {showViewMenu && (
-                <div className={headerMenuClass}>
-                  <button onClick={() => { undo(); setShowViewMenu(false); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-3.5 w-3.5" />Undo</button>
-                  <button onClick={() => { redo(); setShowViewMenu(false); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-3.5 w-3.5" />Redo</button>
-                  <button onClick={() => { syncFromEditor(); setShowViewMenu(false); }} className={headerMenuItemClass}><Play className="h-3.5 w-3.5" />Sync</button>
-                  <button onClick={() => { setCanvasResetKey((value) => value + 1); setShowViewMenu(false); }} className={headerMenuItemClass}>Fit Canvas</button>
-                </div>
-              )}
-            </div>
-            <div className="relative" ref={labelsMenuRef}>
-              <button
-                onClick={() => {
-                  setShowLabelsMenu((value) => !value);
-                  setShowFileMenu(false);
-                  setShowViewMenu(false);
-                  setShowLayoutMenu(false);
-                  setShowAutoLayoutMenu(false);
-                  setShowExportMenu(false);
-                }}
-                className={controlButtonClass}
-              >
-                Labels
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {showLabelsMenu && (
-                <div className={`${headerMenuClass} max-h-[60vh] min-w-[240px] overflow-y-auto`}>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
-                    <input type="checkbox" checked={currentDoc.style.showLabels} onChange={(event) => patchStyle({ showLabels: event.target.checked })} className="mr-2" />
-                    Show Labels
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
-                    Position
-                    <select value={currentDoc.style.labelPosition} onChange={(event) => patchStyle({ labelPosition: event.target.value as "inside" | "outside" })} className={rightPanelFieldCompactClass}>
-                      <option value="outside">Outside</option>
-                      <option value="inside">Inside</option>
-                    </select>
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
-                    Font Size
-                    <input type="range" min={10} max={24} value={currentDoc.style.labelFontSize} onChange={(event) => patchStyle({ labelFontSize: Number(event.target.value) })} className="mt-1 w-full" />
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
-                    Font Family
-                    <select value={currentDoc.style.labelFontFamily} onChange={(event) => patchStyle({ labelFontFamily: event.target.value as "Roboto" | "Google Sans" | "System Sans" })} className={rightPanelFieldCompactClass}>
-                      <option value="Google Sans">Google Sans</option>
-                      <option value="Roboto">Roboto</option>
-                      <option value="System Sans">System Sans</option>
-                    </select>
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">
-                    Label Color
-                    <input type="color" value={currentDoc.style.labelColor} onChange={(event) => patchStyle({ labelColor: event.target.value })} className="mt-1 h-8 w-full rounded border border-[var(--border-base)] bg-[var(--bg-elevated)] p-1" />
-                  </label>
-                </div>
-              )}
-            </div>
-            <div className="relative" ref={layoutMenuRef}>
-              <button
-                onClick={() => {
-                  setShowLayoutMenu((value) => !value);
-                  setShowFileMenu(false);
-                  setShowViewMenu(false);
-                  setShowLabelsMenu(false);
-                  setShowAutoLayoutMenu(false);
-                  setShowExportMenu(false);
-                }}
-                className={controlButtonClass}
-              >
-                Layout
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {showLayoutMenu && (
-                <div className={`${headerMenuClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Width
-                    <input type="range" min={8} max={42} value={currentDoc.style.nodeWidth} onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })} className="mt-1 w-full" />
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Padding
-                    <input type="range" min={4} max={50} value={currentDoc.style.nodePadding} onChange={(event) => patchStyle({ nodePadding: Number(event.target.value) })} className="mt-1 w-full" />
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Radius
-                    <input type="range" min={0} max={24} value={currentDoc.style.nodeRadius} onChange={(event) => patchStyle({ nodeRadius: Number(event.target.value) })} className="mt-1 w-full" />
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Link Opacity
-                    <input type="range" min={5} max={100} value={Math.round(currentDoc.style.linkOpacity * 100)} onChange={(event) => patchStyle({ linkOpacity: Number(event.target.value) / 100 })} className="mt-1 w-full" />
-                  </label>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Curvature
-                    <input type="range" min={0.15} max={0.85} step={0.01} value={currentDoc.style.curvature} onChange={(event) => patchStyle({ curvature: Number(event.target.value) })} className="mt-1 w-full" />
-                  </label>
-                  <div className="mt-1 border-t border-[var(--border-base)] p-2">
-                    <p className="mb-1 text-[11px] font-semibold text-[var(--text-secondary)]">Trace</p>
-                    <div className="grid grid-cols-3 gap-1">
-                      <button onClick={() => setTraceMode("none")} className={traceMode === "none" ? headerMenuItemActiveClass : headerMenuItemClass}>None</button>
-                      <button onClick={() => setTraceMode("upstream")} className={traceMode === "upstream" ? headerMenuItemActiveClass : headerMenuItemClass}>Upstream</button>
-                      <button onClick={() => setTraceMode("downstream")} className={traceMode === "downstream" ? headerMenuItemActiveClass : headerMenuItemClass}>Downstream</button>
-                    </div>
-                    <button onClick={clearSelectionWithNotice} className={`mt-2 w-full ${headerMenuItemClass}`}>Clear Selection</button>
-                  </div>
+                  <div className="my-1 border-t border-[var(--border-base)]" />
+                  <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={`${headerMenuItemClass} text-rose-500 hover:text-rose-600`}>
+                    <Trash2 className="h-4 w-4" />Delete Current
+                  </button>
                 </div>
               )}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="text-xs text-[var(--text-tertiary)]">{Math.round(zoomLevel * 100)}%</div>
+          <div className="text-xs font-medium text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] px-2 py-1 rounded-full">{Math.round(zoomLevel * 100)}%</div>
+
+          <div className="relative" ref={displayMenuRef}>
+            <button
+              onClick={() => {
+                setShowDisplayMenu((value) => !value);
+                setShowFileMenu(false);
+                setShowAutoLayoutMenu(false);
+                setShowExportMenu(false);
+              }}
+              className={controlButtonClass}
+              title="Display Settings"
+            >
+              <Settings2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Display</span>
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            {showDisplayMenu && (
+              <div className={`${headerMenuClass} w-[280px]`}>
+                <div className="mb-2 flex gap-1 p-1 bg-[var(--bg-tertiary)] rounded-xl">
+                  {(["view", "labels", "layout"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setDisplayMenuTab(tab)}
+                      className={`flex-1 rounded-lg py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === tab
+                        ? "bg-[var(--bg-elevated)] text-[var(--text-primary)] shadow-sm"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                        }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                {displayMenuTab === "view" && (
+                  <div className="space-y-1">
+                    <button onClick={() => { undo(); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-4 w-4" />Undo</button>
+                    <button onClick={() => { redo(); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-4 w-4" />Redo</button>
+                    <button onClick={() => { syncFromEditor(); }} className={headerMenuItemClass}><Play className="h-4 w-4" />Sync</button>
+                    <button onClick={() => { setCanvasResetKey((value) => value + 1); }} className={headerMenuItemClass}>Fit Canvas</button>
+                    <div className="mt-2 border-t border-[var(--border-base)] pt-2 px-2">
+                      <p className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">Trace Mode</p>
+                      <div className="grid grid-cols-3 gap-1">
+                        <button onClick={() => setTraceMode("none")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "none" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>None</button>
+                        <button onClick={() => setTraceMode("upstream")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "upstream" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>Up</button>
+                        <button onClick={() => setTraceMode("downstream")} className={`rounded px-2 py-1 text-xs transition ${traceMode === "downstream" ? "bg-[var(--primary)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"}`}>Down</button>
+                      </div>
+                      <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Clear Selection</button>
+                    </div>
+                  </div>
+                )}
+
+                {displayMenuTab === "labels" && (
+                  <div className="space-y-3 px-2 py-1">
+                    <label className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
+                      Show Labels
+                      <input type="checkbox" checked={currentDoc.style.showLabels} onChange={(event) => patchStyle({ showLabels: event.target.checked })} className="rounded border-slate-600 bg-slate-900" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">
+                      Position
+                      <select value={currentDoc.style.labelPosition} onChange={(event) => patchStyle({ labelPosition: event.target.value as "inside" | "outside" })} className={rightPanelFieldCompactClass}>
+                        <option value="outside">Outside</option>
+                        <option value="inside">Inside</option>
+                      </select>
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">
+                      Font Size ({currentDoc.style.labelFontSize}px)
+                      <input type="range" min={10} max={24} value={currentDoc.style.labelFontSize} onChange={(event) => patchStyle({ labelFontSize: Number(event.target.value) })} className="mt-1 w-full" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">
+                      Font Family
+                      <select value={currentDoc.style.labelFontFamily} onChange={(event) => patchStyle({ labelFontFamily: event.target.value as "Roboto" | "Google Sans" | "System Sans" })} className={rightPanelFieldCompactClass}>
+                        <option value="Google Sans">Google Sans</option>
+                        <option value="Roboto">Roboto</option>
+                        <option value="System Sans">System Sans</option>
+                      </select>
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">
+                      Label Color
+                      <div className="mt-1 flex gap-2">
+                        <input type="color" value={currentDoc.style.labelColor} onChange={(event) => patchStyle({ labelColor: event.target.value })} className="h-8 w-full rounded cursor-pointer" />
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {displayMenuTab === "layout" && (
+                  <div className="space-y-3 px-2 py-1">
+                    <label className="block text-xs text-[var(--text-secondary)]">Node Width ({currentDoc.style.nodeWidth}px)
+                      <input type="range" min={8} max={42} value={currentDoc.style.nodeWidth} onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })} className="mt-1 w-full" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">Node Padding ({currentDoc.style.nodePadding}px)
+                      <input type="range" min={4} max={50} value={currentDoc.style.nodePadding} onChange={(event) => patchStyle({ nodePadding: Number(event.target.value) })} className="mt-1 w-full" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">Node Radius ({currentDoc.style.nodeRadius}px)
+                      <input type="range" min={0} max={24} value={currentDoc.style.nodeRadius} onChange={(event) => patchStyle({ nodeRadius: Number(event.target.value) })} className="mt-1 w-full" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">Link Opacity ({Math.round(currentDoc.style.linkOpacity * 100)}%)
+                      <input type="range" min={5} max={100} value={Math.round(currentDoc.style.linkOpacity * 100)} onChange={(event) => patchStyle({ linkOpacity: Number(event.target.value) / 100 })} className="mt-1 w-full" />
+                    </label>
+                    <label className="block text-xs text-[var(--text-secondary)]">Curvature
+                      <input type="range" min={0.15} max={0.85} step={0.01} value={currentDoc.style.curvature} onChange={(event) => patchStyle({ curvature: Number(event.target.value) })} className="mt-1 w-full" />
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="relative" ref={autoLayoutMenuRef}>
             <button
               onClick={() => {
                 setShowAutoLayoutMenu((value) => !value);
                 setShowFileMenu(false);
-                setShowViewMenu(false);
-                setShowLabelsMenu(false);
-                setShowLayoutMenu(false);
+                setShowDisplayMenu(false);
                 setShowExportMenu(false);
               }}
               className={controlButtonWideClass}
@@ -2204,11 +2163,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       applyAutoLayoutStrategy(item.id);
                       setShowAutoLayoutMenu(false);
                     }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs ${
-                      autoLayoutStrategy === item.id
-                        ? "bg-[var(--primary-subtle)] text-[var(--primary-text)]"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-                    }`}
+                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs ${autoLayoutStrategy === item.id
+                      ? "bg-[var(--primary-subtle)] text-[var(--primary-text)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                      }`}
                   >
                     <span>{item.label}</span>
                     {autoLayoutStrategy === item.id && <span>Current</span>}
@@ -2222,9 +2180,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               onClick={() => {
                 setShowExportMenu((value) => !value);
                 setShowFileMenu(false);
-                setShowViewMenu(false);
-                setShowLabelsMenu(false);
-                setShowLayoutMenu(false);
+                setShowDisplayMenu(false);
                 setShowAutoLayoutMenu(false);
               }}
               className="inline-flex items-center gap-1 rounded-lg border border-[color:color-mix(in_srgb,var(--primary)_45%,transparent)] bg-gradient-to-r from-[var(--primary)] to-[var(--flow-5)] px-3 py-1.5 text-xs font-semibold text-[var(--text-on-primary)] shadow"
@@ -2276,21 +2232,19 @@ export function EditorWorkspace({ templateId, docId }: Props) {
             <div className="grid grid-cols-2 rounded-lg border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-secondary)_90%,transparent)] p-1 text-[11px]">
               <button
                 onClick={() => setLibraryTab("documents")}
-                className={`rounded-md px-2 py-1 font-medium ${
-                  libraryTab === "documents"
-                    ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
-                    : "text-[var(--text-tertiary)]"
-                }`}
+                className={`rounded-md px-2 py-1 font-medium ${libraryTab === "documents"
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
+                  : "text-[var(--text-tertiary)]"
+                  }`}
               >
                 Documents
               </button>
               <button
                 onClick={() => setLibraryTab("templates")}
-                className={`rounded-md px-2 py-1 font-medium ${
-                  libraryTab === "templates"
-                    ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
-                    : "text-[var(--text-tertiary)]"
-                }`}
+                className={`rounded-md px-2 py-1 font-medium ${libraryTab === "templates"
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)] shadow"
+                  : "text-[var(--text-tertiary)]"
+                  }`}
               >
                 Templates
               </button>
@@ -2397,11 +2351,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   <button
                     key={doc.id}
                     onClick={() => openDocumentById(doc.id)}
-                    className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${
-                      doc.id === currentDoc.id
-                        ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
-                        : "border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800"
-                    }`}
+                    className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${doc.id === currentDoc.id
+                      ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
+                      : "border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800"
+                      }`}
                   >
                     <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
                     <p className="mt-0.5 text-[10px] text-slate-500">
@@ -2446,7 +2399,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                             {(template.tags ?? []).slice(0, 3).map((tag) => (
                               <span
                                 key={`${template.id}-library-tag-${tag}`}
-                              className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300"
+                                className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300"
                               >
                                 #{tag}
                               </span>
@@ -2540,142 +2493,125 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </div>
         ) : (
           <>
-            <div className="pointer-events-none absolute left-1 top-1/2 z-[121] flex -translate-y-1/2 flex-col gap-2">
+            <div className="pointer-events-none absolute left-0 top-1/2 z-[121] flex -translate-y-1/2 flex-col gap-2 pl-2">
               <button
                 type="button"
                 onClick={toggleLeftWorkbench}
-                className={floatingIconButtonClass}
+                className={`${floatingIconButtonClass} ${!leftWorkbenchVisible ? "animate-pulse-subtle border-[var(--primary)] text-[var(--primary)]" : ""}`}
                 title={leftWorkbenchVisible ? "Collapse workbench (Shift+Tab)" : "Open workbench (Shift+Tab)"}
               >
-                {leftWorkbenchVisible ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                {leftWorkbenchVisible ? <ChevronLeft className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
               </button>
-              {leftWorkbenchVisible && (
-                <button
-                  type="button"
-                  onClick={toggleLeftWorkbenchSize}
-                  className={floatingIconButtonClass}
-                  title="Toggle compact/expanded width"
-                >
-                  <GripVertical className="h-4 w-4" />
-                </button>
-              )}
+
             </div>
 
           </>
         )}
 
         <aside
-          className={`${leftPanelClass} ${leftWorkbenchVisible ? "translate-x-0" : "-translate-x-full"}`}
+          className={`${leftPanelClass} ${leftWorkbenchVisible ? "translate-x-0" : "-translate-x-full"} flex flex-col`}
           style={{ width: leftWorkbenchWidth }}
         >
-          <div className="p-2">
-            <div
-              className={`grid grid-cols-2 rounded-lg border p-1 text-xs ${
-                isDarkTheme
-                  ? "border-slate-700 bg-slate-800/70"
-                  : "border-slate-300 bg-slate-100/90"
-              }`}
-            >
-              <button
-                onClick={() => setActiveTab("source")}
-                className={`rounded-md px-3 py-1.5 font-medium transition ${
-                  activeTab === "source"
-                    ? isDarkTheme
-                      ? "bg-slate-700 text-slate-100 shadow"
-                      : "bg-white text-slate-800 shadow"
-                    : isDarkTheme
-                      ? "text-slate-400 hover:text-slate-200"
-                      : "text-slate-500 hover:text-slate-700"
-                }`}
+          {/* Sidebar Toolbar */}
+          <div className="flex h-12 w-full items-center justify-between border-b border-[var(--border-base)] bg-[var(--bg-elevated)] px-3 shadow-sm z-10">
+            <div className="flex items-center gap-2">
+              <select
+                value={currentDoc.format}
+                onChange={(e) => {
+                  const newFormat = e.target.value as DataFormat;
+                  const text = currentDoc.editorText; // Get current text
+                  // Ideally we'd try to convert, but for now just switch mode.
+                  // The storage logic or parent might handle conversion if implemented,
+                  // but usually it just interprets the text differently.
+                  const newDoc = { ...currentDoc, format: newFormat };
+                  void upsertDocument(newDoc).then(() => {
+                    setCurrentDocumentId(newDoc.id);
+                  });
+                }}
+                className="h-8 rounded-lg border border-[var(--border-base)] bg-[var(--bg-secondary)] px-2 text-xs font-medium text-[var(--text-primary)] focus:border-[var(--primary)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+                title="Data Format"
               >
-                Import
+                <option value="sankey">Sankey DSL</option>
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                ref={rawImportInputRef}
+                className="hidden"
+                type="file"
+                accept=".csv,.json,.txt,.dsl"
+                onChange={onRawFileUpload}
+              />
+              <button
+                onClick={() => rawImportInputRef.current?.click()}
+                className={toolbarIconButtonClass}
+                title="Import File"
+              >
+                <FileUp className="h-4 w-4" />
               </button>
               <button
-                onClick={() => setActiveTab("editor")}
-                className={`rounded-md px-3 py-1.5 font-medium transition ${
-                  activeTab === "editor"
-                    ? isDarkTheme
-                      ? "bg-slate-700 text-slate-100 shadow"
-                      : "bg-white text-slate-800 shadow"
-                    : isDarkTheme
-                      ? "text-slate-400 hover:text-slate-200"
-                      : "text-slate-500 hover:text-slate-700"
-                }`}
+                onClick={() => {
+                  const content = currentDoc.editorText;
+                  const mime = currentDoc.format === "json" ? "application/json" : "text/plain";
+                  const ext = currentDoc.format === "json" ? "json" : currentDoc.format === "csv" ? "csv" : "dsl";
+                  downloadFile(`sankey-data.${ext}`, mime, content);
+                }}
+                className={toolbarIconButtonClass}
+                title="Download Source"
               >
-                Editor
+                <FileDown className="h-4 w-4" />
               </button>
             </div>
           </div>
 
-          {activeTab === "source" ? (
-            <div className="space-y-3 overflow-auto p-4">
-              <div
-                className={`rounded-xl border border-dashed p-5 text-center transition ${
-                  isDragOver
-                    ? "border-indigo-400 bg-indigo-500/12"
-                    : "border-slate-500/55 bg-slate-900/30 hover:border-indigo-400/70 hover:bg-indigo-500/8"
-                }`}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setIsDragOver(true);
-                }}
-                onDragLeave={() => setIsDragOver(false)}
-                onDrop={onRawDrop}
-              >
-                <p className="text-sm font-medium text-[var(--text-primary)]">
-                  Drop CSV / JSON / DSL file here
-                </p>
-                <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                  or click to import from file
-                </p>
-                <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
-                  Imported data will open in the Editor tab for editing.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => rawImportInputRef.current?.click()}
-                  className="mt-3 rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)]"
-                >
-                  Import File
-                </button>
+          <div
+            className="relative flex-1 min-h-0 bg-[var(--bg-secondary)]"
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragOver(true);
+            }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={onRawDrop}
+          >
+            {isDragOver && (
+              <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--primary)]/10 backdrop-blur-[1px] border-2 border-dashed border-[var(--primary)] m-2 rounded-xl">
+                <div className="pointer-events-none rounded-xl bg-[var(--bg-elevated)] px-4 py-2 font-medium text-[var(--primary)] shadow-lg">
+                  Drop file to import
+                </div>
+              </div>
+            )}
+
+            <SankeyMonacoEditor
+              value={currentDoc.editorText}
+              format={currentDoc.format}
+              theme={currentDoc.style.theme}
+              onChange={setEditorText}
+              marker={parseIssue}
+            />
+          </div>
+
+          {/* Footer / Status Bar */}
+          <div className="border-t border-[var(--border-base)] bg-[var(--bg-elevated)]">
+            <div className="flex items-center justify-between px-3 py-1.5">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors">
                 <input
-                  ref={rawImportInputRef}
-                  className="hidden"
-                  type="file"
-                  accept=".csv,.json,.txt,.dsl"
-                  onChange={onRawFileUpload}
+                  type="checkbox"
+                  checked={autoSync}
+                  onChange={(event) => setAutoSync(event.target.checked)}
+                  className="rounded border-[var(--border-base)] bg-[var(--bg-secondary)] text-[var(--primary)] focus:ring-[var(--primary)]"
                 />
-              </div>
-
-              <IssueCenter issues={sourceIssues} />
-
+                Auto-sync
+              </label>
+              {/* Could put issue count here or similar status */}
             </div>
-          ) : (
-            <div className="min-h-0 flex-1 border-t">
-              <div className="flex h-9 items-center justify-between border-b border-slate-700 bg-slate-900/75 px-3 text-xs text-slate-400">
-                <span>{fileHint}</span>
-                <label className="inline-flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={autoSync}
-                    onChange={(event) => setAutoSync(event.target.checked)}
-                  />
-                  Auto-sync
-                </label>
+            {(editorIssues.length > 0) && (
+              <div className="border-t border-[var(--border-base)]">
+                <IssueCenter issues={editorIssues} className="px-4 py-3" />
               </div>
-              <div className="h-[calc(100%-36px)]">
-                <SankeyMonacoEditor
-                  value={currentDoc.editorText}
-                  format={currentDoc.format}
-                  theme={currentDoc.style.theme}
-                  onChange={setEditorText}
-                  marker={parseIssue}
-                />
-              </div>
-            </div>
-          )}
-
-          <IssueCenter issues={editorIssues} className="border-t px-4 py-3" />
+            )}
+          </div>
         </aside>
 
         <main className={canvasContainerClass}>
@@ -2711,56 +2647,56 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           </motion.div>
         </main>
 
-      {activeEditorModal && activeEditorModal.type === "link" && linkEditDraft && (
-        <FlowEditModal
-          mode="link"
-          draft={linkEditDraft}
-          anchor={editorModalAnchor}
-          related={{
-            sameSourceCount: graph.links.filter(
-              (link, index) =>
-                index !== activeEditorModal.index && link.source === linkEditDraft.source,
-            ).length,
-            sameTargetCount: graph.links.filter(
-              (link, index) =>
-                index !== activeEditorModal.index && link.target === linkEditDraft.target,
-            ).length,
-          }}
-          onJumpSameSource={() => jumpToRelatedLink("source")}
-          onJumpSameTarget={() => jumpToRelatedLink("target")}
-          nodeOptions={nodeIdOptions}
-          error={editorModalError ?? linkDraftValidationError}
-          canSave={!linkDraftValidationError}
-          onDraftChange={(draft) => {
-            setEditorModalError(null);
-            setLinkEditDraft(draft);
-          }}
-          onSave={saveLinkEdit}
-          onDelete={deleteLinkEdit}
-          onClose={closeEditorModal}
-        />
-      )}
+        {activeEditorModal && activeEditorModal.type === "link" && linkEditDraft && (
+          <FlowEditModal
+            mode="link"
+            draft={linkEditDraft}
+            anchor={editorModalAnchor}
+            related={{
+              sameSourceCount: graph.links.filter(
+                (link, index) =>
+                  index !== activeEditorModal.index && link.source === linkEditDraft.source,
+              ).length,
+              sameTargetCount: graph.links.filter(
+                (link, index) =>
+                  index !== activeEditorModal.index && link.target === linkEditDraft.target,
+              ).length,
+            }}
+            onJumpSameSource={() => jumpToRelatedLink("source")}
+            onJumpSameTarget={() => jumpToRelatedLink("target")}
+            nodeOptions={nodeIdOptions}
+            error={editorModalError ?? linkDraftValidationError}
+            canSave={!linkDraftValidationError}
+            onDraftChange={(draft) => {
+              setEditorModalError(null);
+              setLinkEditDraft(draft);
+            }}
+            onSave={saveLinkEdit}
+            onDelete={deleteLinkEdit}
+            onClose={closeEditorModal}
+          />
+        )}
 
-      {activeEditorModal && activeEditorModal.type === "node" && nodeEditDraft && (
-        <FlowEditModal
-          mode="node"
-          draft={nodeEditDraft}
-          anchor={editorModalAnchor}
-          nodeOptions={nodeIdOptions}
-          stats={nodeStatsById.get(nodeEditDraft.id)}
-          error={editorModalError ?? nodeDraftValidationError}
-          canSave={!nodeDraftValidationError}
-          onDraftChange={(draft) => {
-            setEditorModalError(null);
-            setNodeEditDraft(draft);
-          }}
-          onSave={saveNodeEdit}
-          onClose={closeEditorModal}
-        />
-      )}
+        {activeEditorModal && activeEditorModal.type === "node" && nodeEditDraft && (
+          <FlowEditModal
+            mode="node"
+            draft={nodeEditDraft}
+            anchor={editorModalAnchor}
+            nodeOptions={nodeIdOptions}
+            stats={nodeStatsById.get(nodeEditDraft.id)}
+            error={editorModalError ?? nodeDraftValidationError}
+            canSave={!nodeDraftValidationError}
+            onDraftChange={(draft) => {
+              setEditorModalError(null);
+              setNodeEditDraft(draft);
+            }}
+            onSave={saveNodeEdit}
+            onClose={closeEditorModal}
+          />
+        )}
 
-        
-      {dialogNode}
+
+        {dialogNode}
 
       </div>
     </div>

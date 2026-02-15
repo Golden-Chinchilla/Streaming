@@ -296,6 +296,81 @@ function parseCsv(text: string): ParseResult {
   return { ok: true, graph: buildGraph(links) };
 }
 
+function parseFlowDsl(text: string): ParseResult | null {
+  const lines = text.split(/\r?\n/);
+  const links: SankeyLinkInput[] = [];
+  let sawDslCandidate = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("//")) continue;
+
+    const match = rawLine.match(/^\s*(.+?)\s*\[\s*([^\]]+?)\s*\]\s*(.+?)\s*$/);
+    if (!match) {
+      if (rawLine.includes("[") || rawLine.includes("]")) {
+        sawDslCandidate = true;
+        return {
+          ok: false,
+          issue: {
+            message: 'Flow syntax error: expected "Source [value] Target"',
+            line: index + 1,
+            column: 1,
+          },
+        };
+      }
+      continue;
+    }
+
+    sawDslCandidate = true;
+    const source = match[1].trim();
+    const valueText = match[2].trim();
+    const target = match[3].trim();
+    const numeric = Number(valueText.replace(/,/g, ""));
+
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      const valueColumn = Math.max(1, rawLine.indexOf(valueText) + 1);
+      return {
+        ok: false,
+        issue: {
+          message: 'Flow syntax error: "value" must be a positive number',
+          line: index + 1,
+          column: valueColumn,
+        },
+      };
+    }
+
+    const parsed = linkSchema.safeParse({ source, target, value: numeric });
+    if (!parsed.success) {
+      return {
+        ok: false,
+        issue: {
+          message: "Flow syntax error: invalid row values",
+          line: index + 1,
+          column: 1,
+        },
+      };
+    }
+
+    links.push(parsed.data);
+  }
+
+  if (!sawDslCandidate) return null;
+  if (links.length === 0) {
+    return {
+      ok: false,
+      issue: {
+        message: "Flow syntax error: no valid flow rows found",
+        line: 1,
+        column: 1,
+      },
+    };
+  }
+
+  return { ok: true, graph: buildGraph(links) };
+}
+
 export function parseSankeyText(text: string, format: DataFormat): SankeyGraph {
   const result = parseSankeyTextDetailed(text, format);
   if (!result.ok) {
@@ -305,8 +380,13 @@ export function parseSankeyText(text: string, format: DataFormat): SankeyGraph {
 }
 
 export function parseSankeyTextDetailed(text: string, format: DataFormat): ParseResult {
-  if (format === "csv") {
-    return parseCsv(text);
+  const primary = format === "csv" ? parseCsv(text) : parseJson(text);
+  if (primary.ok) return primary;
+
+  const dslFallback = parseFlowDsl(text);
+  if (dslFallback) {
+    return dslFallback;
   }
-  return parseJson(text);
+
+  return primary;
 }

@@ -1,37 +1,23 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ChevronDown, ChevronUp, FileUp, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, Moon, Plus, Search, Sun, Trash2 } from "lucide-react";
 import {
   clearRecentTemplateIds,
+  deleteDocumentById,
   deleteUserTemplate,
   deleteUserTemplates,
+  loadAppPreferences,
   loadRecentDocuments,
   loadRecentTemplateIds,
   loadUserTemplates,
-  saveCurrentDocument,
-  saveRecentDocument,
-  setCurrentDocumentId,
-  upsertDocument,
+  saveAppPreferences,
   upsertUserTemplate,
 } from "@/lib/storage";
-import {
-  TableMapping,
-  TablePreview,
-  linksToCanonicalCsv,
-  linksToCanonicalJson,
-  parseCsvPreview,
-  parseJsonPreview,
-  parseXlsxPreview,
-  transformRowsToCanonicalLinks,
-} from "@/lib/source-import";
-import { blankDocument, templateList } from "@/lib/templates";
-import { DataFormat, SankeyDocument, TemplateSummary } from "@/lib/types";
-import { AppIssue } from "@/lib/issues";
-import { ImportMappingModal } from "@/components/home/import-mapping-modal";
-import { IssueCenter } from "@/components/common/issue-center";
+import { templateList } from "@/lib/templates";
+import { SankeyDocument, TemplateSummary } from "@/lib/types";
 import { useAppDialog } from "@/components/common/app-dialog";
 import {
   buttonPrimaryMd,
@@ -46,42 +32,11 @@ type SortMode = "name" | "difficulty" | "category";
 type SourceMode = "all" | "user" | "builtin";
 type DifficultyFilter = "All" | "Easy" | "Medium" | "Advanced";
 
-type UploadFeedback = {
-  kind: "error" | "success";
-  title: string;
-  details: string[];
-};
-
-type PendingImport = {
-  fileName: string;
-  preview: TablePreview;
-  outputFormat: DataFormat;
-};
-
-type MappingPreset = {
-  id: string;
-  name: string;
-  mode: "csv" | "json";
-  mapping: TableMapping;
-  createdAt: number;
-  lastUsedAt?: number;
-};
-
 const difficultyRank: Record<string, number> = {
   Easy: 1,
   Medium: 2,
   Advanced: 3,
 };
-
-const MAPPING_PRESETS_STORAGE_KEY = "streaming-mapping-presets-v1";
-
-function detectFileFormat(fileName: string): DataFormat | "xlsx" | null {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".csv")) return "csv";
-  if (lower.endsWith(".json")) return "json";
-  if (lower.endsWith(".xlsx")) return "xlsx";
-  return null;
-}
 
 function formatRelativeTime(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -97,6 +52,7 @@ function formatRelativeTime(timestamp: number): string {
 
 export function TemplateGallery() {
   const { confirm, prompt, dialogNode } = useAppDialog();
+  const [homeTheme, setHomeTheme] = useState<"light" | "dark">("dark");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [sortMode, setSortMode] = useState<SortMode>("name");
@@ -109,34 +65,7 @@ export function TemplateGallery() {
   const [recentTemplateIds, setRecentTemplateIds] = useState<string[]>([]);
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
   const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
-  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
-  const [pendingMapping, setPendingMapping] = useState<TableMapping>({ source: "", target: "", value: "" });
-  const [pendingValuePolicy, setPendingValuePolicy] = useState<"drop" | "clamp">("drop");
-  const [pendingMinValue, setPendingMinValue] = useState(1);
-  const [selectedPresetId, setSelectedPresetId] = useState("");
-  const [presetSearch, setPresetSearch] = useState("");
-  const [mappingPresets, setMappingPresets] = useState<MappingPreset[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const rawValue = window.localStorage.getItem(MAPPING_PRESETS_STORAGE_KEY);
-      if (!rawValue) return [];
-      const parsed = JSON.parse(rawValue) as MappingPreset[];
-      return parsed.filter((item) =>
-        typeof item.id === "string" &&
-        typeof item.name === "string" &&
-        (item.mode === "csv" || item.mode === "json") &&
-        typeof item.mapping?.source === "string" &&
-        typeof item.mapping?.target === "string" &&
-        typeof item.mapping?.value === "string",
-      );
-    } catch {
-      return [];
-    }
-  });
   const router = useRouter();
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshData = async () => {
     const [items, templateIds, templates] = await Promise.all([
@@ -148,238 +77,19 @@ export function TemplateGallery() {
     setRecentTemplateIds(templateIds);
     setUserTemplates(templates);
   };
-  const importFromFile = async (file: File) => {
-    const detected = detectFileFormat(file.name);
-    if (!detected) {
-      setUploadFeedback({
-        kind: "error",
-        title: "Unsupported file type",
-        details: ["Only CSV, JSON, and XLSX are supported."],
-      });
-      return;
-    }
 
-    setUploadFeedback(null);
-    setIsUploading(true);
-    try {
-      const preview =
-        detected === "json"
-          ? parseJsonPreview(await file.text())
-          : detected === "csv"
-            ? parseCsvPreview(await file.text())
-            : parseXlsxPreview(await file.arrayBuffer());
-
-      setPendingImport({
-        fileName: file.name,
-        preview,
-        outputFormat: detected === "json" ? "json" : "csv",
-      });
-      setPendingMapping(preview.mapping);
-      setPendingValuePolicy("drop");
-      setPendingMinValue(1);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to parse file";
-      setUploadFeedback({
-        kind: "error",
-        title: "Import failed",
-        details: [message],
-      });
-    } finally {
-      setIsUploading(false);
-      if (uploadInputRef.current) {
-        uploadInputRef.current.value = "";
-      }
-    }
-  };
-
-  const confirmPendingImport = async () => {
-    if (!pendingImport) return;
-
-    const transformed = transformRowsToCanonicalLinks(pendingImport.preview.rows, pendingMapping, {
-      valuePolicy: pendingValuePolicy,
-      minValue: pendingMinValue,
+  useEffect(() => {
+    let mounted = true;
+    loadAppPreferences().then((prefs) => {
+      if (!mounted) return;
+      const nextTheme = prefs.defaultTheme === "light" ? "light" : "dark";
+      setHomeTheme(nextTheme);
+      document.documentElement.setAttribute("data-theme", nextTheme);
     });
-
-    if (transformed.links.length === 0) {
-      setUploadFeedback({
-        kind: "error",
-        title: "No valid rows after mapping",
-        details: [
-          `Headers detected: ${pendingImport.preview.headers.join(", ") || "(none)"}`,
-          `Mapped columns: source=${pendingMapping.source || "(empty)"}, target=${pendingMapping.target || "(empty)"}, value=${pendingMapping.value || "(empty)"}`,
-          `Rows: total ${transformed.stats.totalRows}, dropped ${transformed.stats.droppedRows}, output ${transformed.stats.outputRows}`,
-          "Please check source/target/value columns and ensure value is a positive number.",
-        ],
-      });
-      return;
-    }
-
-    const editorText =
-      pendingImport.outputFormat === "json"
-        ? linksToCanonicalJson(transformed.links)
-        : linksToCanonicalCsv(transformed.links);
-    const title =
-      (pendingImport.fileName.replace(/\.[^/.]+$/, "").trim() || "Imported Diagram").slice(0, 80);
-    const now = Date.now();
-    const nextDoc: SankeyDocument = {
-      ...blankDocument,
-      id: crypto.randomUUID(),
-      title,
-      format: pendingImport.outputFormat,
-      editorText,
-      updatedAt: now,
+    return () => {
+      mounted = false;
     };
-
-    setUploadFeedback({
-      kind: "success",
-      title: "Import successful",
-      details: [
-        `${transformed.links.length} links generated from ${transformed.stats.totalRows} rows.`,
-        `Dropped rows: ${transformed.stats.droppedRows}.`,
-      ],
-    });
-
-    await Promise.all([
-      upsertDocument(nextDoc),
-      saveCurrentDocument(nextDoc),
-      saveRecentDocument(nextDoc),
-      setCurrentDocumentId(nextDoc.id),
-    ]);
-
-    setPendingImport(null);
-    await refreshData();
-    router.push(`/editor?doc=${encodeURIComponent(nextDoc.id)}`);
-  };
-
-  const onUploadInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await importFromFile(file);
-  };
-
-  const closePendingImport = () => {
-    setPendingImport(null);
-  };
-
-  const pendingMode = pendingImport?.outputFormat ?? "csv";
-  const mappingPresetsForMode = useMemo(
-    () =>
-      mappingPresets
-        .filter((preset) => preset.mode === pendingMode)
-        .sort(
-          (a, b) =>
-            (b.lastUsedAt ?? b.createdAt ?? 0) -
-            (a.lastUsedAt ?? a.createdAt ?? 0),
-        ),
-    [mappingPresets, pendingMode],
-  );
-  const filteredMappingPresetsForMode = useMemo(() => {
-    const keyword = presetSearch.trim().toLowerCase();
-    if (!keyword) return mappingPresetsForMode;
-    return mappingPresetsForMode.filter((preset) => preset.name.toLowerCase().includes(keyword));
-  }, [mappingPresetsForMode, presetSearch]);
-  const presetCompatibilityById = useMemo(() => {
-    const headers = new Set(pendingImport?.preview.headers ?? []);
-    const status: Record<string, boolean> = {};
-    for (const preset of mappingPresetsForMode) {
-      status[preset.id] =
-        headers.has(preset.mapping.source) &&
-        headers.has(preset.mapping.target) &&
-        headers.has(preset.mapping.value);
-    }
-    return status;
-  }, [mappingPresetsForMode, pendingImport?.preview.headers]);
-  const selectedPresetCompatible = selectedPresetId
-    ? (presetCompatibilityById[selectedPresetId] ?? false)
-    : false;
-
-  const savePendingMappingPreset = async () => {
-    if (!pendingImport) return;
-    const entered = await prompt({
-      title: "Save mapping preset",
-      defaultValue: `${pendingImport.outputFormat.toUpperCase()} mapping`,
-      confirmLabel: "Save",
-    });
-    const name = entered?.trim();
-    if (!name) return;
-    const now = Date.now();
-    const preset: MappingPreset = {
-      id: crypto.randomUUID(),
-      name,
-      mode: pendingImport.outputFormat,
-      mapping: { ...pendingMapping },
-      createdAt: now,
-      lastUsedAt: now,
-    };
-    setMappingPresets((prev) => [preset, ...prev].slice(0, 30));
-    setSelectedPresetId(preset.id);
-  };
-
-  const renameSelectedPreset = async () => {
-    if (!selectedPresetId) return;
-    const current = mappingPresets.find((preset) => preset.id === selectedPresetId);
-    if (!current) return;
-    const entered = await prompt({
-      title: "Rename preset",
-      defaultValue: current.name,
-      confirmLabel: "Rename",
-    });
-    const nextName = entered?.trim();
-    if (!nextName || nextName === current.name) return;
-    setMappingPresets((prev) =>
-      prev.map((preset) =>
-        preset.id === selectedPresetId
-          ? {
-              ...preset,
-              name: nextName,
-            }
-          : preset,
-      ),
-    );
-  };
-
-  const applySelectedPreset = () => {
-    if (!selectedPresetId) return;
-    if (!selectedPresetCompatible) {
-      setUploadFeedback({
-        kind: "error",
-        title: "Preset incompatible with current file",
-        details: ["Preset columns are not all present in this dataset."],
-      });
-      return;
-    }
-    const preset = mappingPresetsForMode.find((item) => item.id === selectedPresetId);
-    if (!preset) return;
-
-    const now = Date.now();
-    setMappingPresets((prev) => {
-      const target = prev.find((item) => item.id === selectedPresetId);
-      if (!target) return prev;
-      const updated = { ...target, lastUsedAt: now };
-      return [updated, ...prev.filter((item) => item.id !== selectedPresetId)];
-    });
-    setPendingMapping({ ...preset.mapping });
-  };
-
-  const deleteSelectedPreset = () => {
-    if (!selectedPresetId) return;
-    setMappingPresets((prev) => prev.filter((preset) => preset.id !== selectedPresetId));
-    setSelectedPresetId("");
-  };
-
-  const clearPresetsForMode = async () => {
-    const count = mappingPresetsForMode.length;
-    if (count === 0) return;
-    const confirmed = await confirm({
-      title: `Delete all ${pendingMode.toUpperCase()} presets?`,
-      message: `${count} preset(s) will be removed.`,
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    setMappingPresets((prev) => prev.filter((preset) => preset.mode !== pendingMode));
-    setSelectedPresetId("");
-  };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -395,27 +105,6 @@ export function TemplateGallery() {
       mounted = false;
     };
   }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(MAPPING_PRESETS_STORAGE_KEY, JSON.stringify(mappingPresets));
-  }, [mappingPresets]);
-
-  useEffect(() => {
-    if (!pendingImport) {
-      setSelectedPresetId("");
-      return;
-    }
-    const hasSelected = mappingPresets.some((preset) => preset.id === selectedPresetId);
-    if (!hasSelected) {
-      setSelectedPresetId("");
-    }
-  }, [mappingPresets, pendingImport, selectedPresetId]);
-
-  useEffect(() => {
-    if (!pendingImport) {
-      setPresetSearch("");
-    }
-  }, [pendingImport]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -577,6 +266,18 @@ export function TemplateGallery() {
     setRecentTemplateIds([]);
   };
 
+  const deleteRecentDocument = async (doc: SankeyDocument) => {
+    const confirmed = await confirm({
+      title: "Delete recent document?",
+      message: `This will permanently delete "${doc.title || "Untitled Diagram"}".`,
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    await deleteDocumentById(doc.id);
+    setRecentDocs((current) => current.filter((item) => item.id !== doc.id));
+  };
+
   const editUserTemplate = async (template: TemplateSummary) => {
     const nameInput = await prompt({
       title: "Template name",
@@ -629,25 +330,16 @@ export function TemplateGallery() {
     await refreshData();
   };
 
-  const uploadIssues = useMemo<AppIssue[]>(() => {
-    if (!uploadFeedback) return [];
-    return [
-      {
-        id: "home-upload-feedback",
-        level: uploadFeedback.kind === "error" ? "error" : "success",
-        title: uploadFeedback.title,
-        details: uploadFeedback.details,
-      },
-    ];
-  }, [uploadFeedback]);
-
-  const pendingPreviewStats = useMemo(() => {
-    if (!pendingImport) return null;
-    return transformRowsToCanonicalLinks(pendingImport.preview.rows, pendingMapping, {
-      valuePolicy: pendingValuePolicy,
-      minValue: pendingMinValue,
-    }).stats;
-  }, [pendingImport, pendingMapping, pendingMinValue, pendingValuePolicy]);
+  const toggleHomeTheme = async () => {
+    const nextTheme = homeTheme === "dark" ? "light" : "dark";
+    setHomeTheme(nextTheme);
+    document.documentElement.setAttribute("data-theme", nextTheme);
+    const prefs = await loadAppPreferences();
+    await saveAppPreferences({
+      ...prefs,
+      defaultTheme: nextTheme,
+    });
+  };
 
   const galleryCardClass = "glass rounded-2xl px-4 py-3 shadow-sm transition hover:border-indigo-300/50";
   const filterSelectClass = "rounded-lg border border-slate-600/70 bg-slate-900/70 px-3 py-2 text-sm text-slate-200";
@@ -668,25 +360,21 @@ export function TemplateGallery() {
               <p className="type-caption text-xs text-slate-500">Professional Diagram Editor</p>
             </div>
           </div>
-          <Link
-            href="/editor"
-            className={`inline-flex items-center gap-2 ${buttonSecondarySm}`}
-          >
-            Continue Editing
-            <ArrowRight className="h-4 w-4" />
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void toggleHomeTheme()}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_90%,transparent)] text-[var(--text-secondary)] shadow hover:bg-[var(--bg-tertiary)]"
+              title={homeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label={homeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            >
+              {homeTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-[1500px] px-6 py-8">
-        <input
-          ref={uploadInputRef}
-          type="file"
-          accept=".csv,.json,.xlsx"
-          className="hidden"
-          onChange={onUploadInputChange}
-        />
-
         <section className="mb-12 grid grid-cols-1 gap-6 xl:grid-cols-12">
           <div className="glass rounded-3xl border border-indigo-400/20 p-8 xl:col-span-7">
             <h1 className="type-hero max-w-2xl text-4xl font-semibold text-slate-100">
@@ -703,23 +391,6 @@ export function TemplateGallery() {
                 New Diagram
                 <Plus className="h-4 w-4" />
               </Link>
-              <button
-                type="button"
-                onClick={() => uploadInputRef.current?.click()}
-                disabled={isUploading}
-                title={isUploading ? "Import in progress. Please wait." : "Upload CSV / JSON / XLSX"}
-                className={`inline-flex items-center gap-2 ${buttonSecondarySm} disabled:cursor-not-allowed disabled:opacity-60`}
-              >
-                <FileUp className="h-4 w-4" />
-                {isUploading ? "Importing..." : "Upload Data"}
-              </button>
-              <Link
-                href="/editor"
-                className="type-caption inline-flex items-center gap-1 text-sm text-slate-300 transition hover:text-indigo-200"
-              >
-                Continue Editing
-                <ArrowRight className="h-4 w-4" />
-              </Link>
             </div>
           </div>
 
@@ -734,23 +405,35 @@ export function TemplateGallery() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
                 {recentDocs.slice(0, 4).map((doc) => (
-                  <Link
-                    key={doc.id}
-                    href={`/editor?doc=${encodeURIComponent(doc.id)}`}
-                    className={galleryCardClass}
-                  >
-                    <p className="type-body text-sm font-semibold text-slate-100">{doc.title || "Untitled Diagram"}</p>
-                    <p className="type-caption mt-1 text-xs text-slate-400">
-                      {formatRelativeTime(doc.updatedAt)} • {doc.format.toUpperCase()}
-                    </p>
-                  </Link>
+                  <div key={doc.id} className="group relative">
+                    <Link
+                      href={`/editor?doc=${encodeURIComponent(doc.id)}`}
+                      className={`block w-full ${galleryCardClass} pr-11`}
+                    >
+                      <p className="type-body text-sm font-semibold text-slate-100">{doc.title || "Untitled Diagram"}</p>
+                      <p className="type-caption mt-1 text-xs text-slate-400">
+                        {formatRelativeTime(doc.updatedAt)} • {doc.format.toUpperCase()}
+                      </p>
+                    </Link>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${doc.title || "Untitled Diagram"}`}
+                      title="Delete"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void deleteRecentDocument(doc);
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md border border-[color:color-mix(in_srgb,var(--error)_45%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_10%,transparent)] p-1.5 text-[color:color-mix(in_srgb,var(--error)_78%,white)] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
           </div>
         </section>
-
-        <IssueCenter issues={uploadIssues} className="mb-8" />
 
         <section className="glass rounded-3xl border border-indigo-400/20 p-5 md:p-6">
           <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -1009,39 +692,6 @@ export function TemplateGallery() {
           )}
         </section>
       </main>
-
-      {pendingImport && (
-        <ImportMappingModal
-          fileName={pendingImport.fileName}
-          headers={pendingImport.preview.headers}
-          pendingMode={pendingMode}
-          presetSearch={presetSearch}
-          onPresetSearchChange={setPresetSearch}
-          canClearModePresets={mappingPresetsForMode.length > 0}
-          onClearModePresets={() => void clearPresetsForMode()}
-          presets={filteredMappingPresetsForMode.map((preset) => ({
-            id: preset.id,
-            name: preset.name,
-            compatible: presetCompatibilityById[preset.id] ?? false,
-          }))}
-          selectedPresetId={selectedPresetId}
-          onSelectedPresetIdChange={setSelectedPresetId}
-          selectedPresetCompatible={selectedPresetCompatible}
-          onApplyPreset={applySelectedPreset}
-          onSavePreset={() => void savePendingMappingPreset()}
-          onRenamePreset={() => void renameSelectedPreset()}
-          onDeletePreset={deleteSelectedPreset}
-          pendingMapping={pendingMapping}
-          onPendingMappingChange={setPendingMapping}
-          pendingValuePolicy={pendingValuePolicy}
-          onPendingValuePolicyChange={setPendingValuePolicy}
-          pendingMinValue={pendingMinValue}
-          onPendingMinValueChange={setPendingMinValue}
-          pendingPreviewStats={pendingPreviewStats}
-          onClose={closePendingImport}
-          onConfirm={() => void confirmPendingImport()}
-        />
-      )}
 
       {dialogNode}
     </div>

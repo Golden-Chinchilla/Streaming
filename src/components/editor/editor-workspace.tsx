@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import {
@@ -9,7 +9,6 @@ import {
   ChevronDown,
   CopyPlus,
   Download,
-  FileUp,
   LayoutTemplate,
   GripVertical,
   Moon,
@@ -41,24 +40,12 @@ import {
   upsertUserTemplate,
   upsertDocument,
 } from "@/lib/storage";
-import {
-  linksToCanonicalCsv,
-  linksToCanonicalJson,
-  parseCsvPreview,
-  parseJsonPreview,
-  parseXlsxPreview,
-  rowsToCanonicalJson,
-  TableMapping,
-  TablePreview,
-  transformRowsToCanonicalLinks,
-} from "@/lib/source-import";
 import { blankDocument, templateById, templateList } from "@/lib/templates";
 import {
   AppPreferences,
   DataFormat,
   PerformanceMode,
   SankeyDocument,
-  SankeyStyle,
   TemplateSummary,
 } from "@/lib/types";
 import { AppIssue } from "@/lib/issues";
@@ -70,23 +57,20 @@ import {
 } from "@/lib/theme";
 import { SankeyMonacoEditor } from "@/components/editor/monaco-editor";
 import { SankeyCanvas } from "@/components/editor/sankey-canvas";
+import {
+  FlowEditModal,
+  LinkEditDraft,
+  NodeEditDraft,
+} from "@/components/editor/flow-edit-modal";
 import { IssueCenter } from "@/components/common/issue-center";
 import { useAppDialog } from "@/components/common/app-dialog";
 import {
-  buttonPrimarySm,
   buttonSecondaryTiny,
   buttonDangerSoftTiny,
   withDisabled,
 } from "@/components/common/interaction-styles";
 import { useEditorStore } from "@/store/editor-store";
-
-function detectFileFormat(fileName: string): DataFormat | "xlsx" | null {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith(".csv")) return "csv";
-  if (lower.endsWith(".json")) return "json";
-  if (lower.endsWith(".xlsx")) return "xlsx";
-  return null;
-}
+import { EditableLink, serializeLinksByFormat } from "@/lib/graph-serialize";
 
 function downloadFile(name: string, mime: string, content: string) {
   const blob = new Blob([content], { type: mime });
@@ -98,14 +82,56 @@ function downloadFile(name: string, mime: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+function looksLikeJson(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function looksLikeCsv(text: string) {
+  const firstNonEmpty = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstNonEmpty) return false;
+  return firstNonEmpty.includes(",");
+}
+
+function looksLikeDsl(text: string) {
+  return /\[[^\]]+\]/.test(text);
+}
+
+function resolveCssVarsInValue(
+  value: string,
+  lookupVar: (name: string) => string | null,
+) {
+  if (!value.includes("var(")) return value;
+  return value.replace(
+    /var\(\s*(--[A-Za-z0-9-_]+)\s*(?:,\s*([^)]+))?\)/g,
+    (_match, varName: string, fallback?: string) => {
+      const resolved = lookupVar(varName)?.trim();
+      if (resolved) return resolved;
+      return fallback?.trim() ?? "";
+    },
+  );
+}
+
+function isTransparentColor(value: string | null | undefined) {
+  if (!value) return true;
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "transparent" ||
+    normalized === "rgba(0, 0, 0, 0)" ||
+    normalized === "rgba(0,0,0,0)"
+  );
+}
+
 type Props = {
   templateId?: string;
   docId?: string;
 };
 
 const EXPORT_SETTINGS_STORAGE_KEY = "streaming-export-settings-v1";
-const MAPPING_PRESETS_STORAGE_KEY = "streaming-mapping-presets-v1";
-const STYLE_PRESET_STORAGE_KEY = "streaming-style-presets-v1";
 const LEFT_WORKBENCH_MODE_STORAGE_KEY = "streaming-editor-left-workbench-mode-v1";
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
@@ -194,142 +220,14 @@ function buildLayoutByStrategy(
   return nextPositions;
 }
 
-type StylePreset = {
-  id: string;
-  name: string;
-  style: SankeyStyle;
-  builtIn?: boolean;
-};
-
-const DEFAULT_STYLE_PRESETS: StylePreset[] = [
-  {
-    id: "style-clean-light",
-    name: "Clean Light",
-    builtIn: true,
-    style: {
-      ...blankDocument.style,
-      theme: "light",
-      palette: "classic",
-      nodeWidth: 20,
-      nodePadding: 18,
-      nodeRadius: 3,
-      linkOpacity: 0.45,
-      curvature: 0.5,
-      labelStyle: "badge",
-      linkRender: "soft",
-      colorStrategy: "palette",
-      showLabels: true,
-      labelFontSize: 12,
-      labelPosition: "outside",
-      labelColor: LIGHT_LABEL_COLOR,
-      labelFontFamily: "Roboto",
-    },
-  },
-  {
-    id: "style-midnight-flow",
-    name: "Midnight Flow",
-    builtIn: true,
-    style: {
-      ...blankDocument.style,
-      theme: "dark",
-      palette: "ocean",
-      nodeWidth: 18,
-      nodePadding: 16,
-      nodeRadius: 4,
-      linkOpacity: 0.55,
-      curvature: 0.45,
-      labelStyle: "badge",
-      linkRender: "soft",
-      colorStrategy: "palette",
-      showLabels: true,
-      labelFontSize: 12,
-      labelPosition: "outside",
-      labelColor: DARK_LABEL_COLOR,
-      labelFontFamily: "Google Sans",
-    },
-  },
-  {
-    id: "style-report-compact",
-    name: "Report Compact",
-    builtIn: true,
-    style: {
-      ...blankDocument.style,
-      theme: "light",
-      palette: "sunset",
-      nodeWidth: 14,
-      nodePadding: 10,
-      nodeRadius: 2,
-      linkOpacity: 0.5,
-      curvature: 0.4,
-      labelStyle: "plain",
-      linkRender: "flat",
-      colorStrategy: "palette",
-      showLabels: true,
-      labelFontSize: 11,
-      labelPosition: "inside",
-      labelColor: "#0f172a",
-      labelFontFamily: "System Sans",
-    },
-  },
-  {
-    id: "style-editorial-light",
-    name: "Editorial Light",
-    builtIn: true,
-    style: {
-      ...blankDocument.style,
-      theme: "light",
-      palette: "classic",
-      nodeWidth: 22,
-      nodePadding: 21,
-      nodeRadius: 4,
-      linkOpacity: 0.52,
-      curvature: 0.48,
-      labelStyle: "badge",
-      linkRender: "soft",
-      colorStrategy: "palette",
-      showLabels: true,
-      labelFontSize: 12,
-      labelPosition: "outside",
-      labelColor: LIGHT_LABEL_COLOR,
-      labelFontFamily: "Google Sans",
-    },
-  },
-  {
-    id: "style-editorial-dark",
-    name: "Editorial Dark",
-    builtIn: true,
-    style: {
-      ...blankDocument.style,
-      theme: "dark",
-      palette: "ocean",
-      nodeWidth: 22,
-      nodePadding: 21,
-      nodeRadius: 4,
-      linkOpacity: 0.56,
-      curvature: 0.48,
-      labelStyle: "badge",
-      linkRender: "soft",
-      colorStrategy: "palette",
-      showLabels: true,
-      labelFontSize: 12,
-      labelPosition: "outside",
-      labelColor: DARK_LABEL_COLOR,
-      labelFontFamily: "Google Sans",
-    },
-  },
-];
-type MappingPreset = {
-  id: string;
-  name: string;
-  mode: "csv" | "json";
-  mapping: TableMapping;
-  createdAt: number;
-};
-
 type LeftWorkbenchMode = "collapsed" | "compact" | "expanded";
 type ActiveWorkspaceOverlay = "none" | "left";
+type ActiveEditorModal =
+  | { type: "link"; index: number }
+  | { type: "node"; id: string }
+  | null;
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
-  defaultTheme: "dark",
+  defaultTheme: "light",
   defaultPerformanceMode: "auto",
   defaultExportTransparentBg: false,
   defaultExportFileTemplate: "{title}-{date}",
@@ -402,6 +300,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const router = useRouter();
   const { confirm, prompt, dialogNode } = useAppDialog();
   const [initialExportSettings] = useState(loadExportSettingsFromStorage);
+  const [isAppPreferencesReady, setIsAppPreferencesReady] = useState(false);
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(
     DEFAULT_APP_PREFERENCES,
   );
@@ -421,20 +320,8 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [userTemplates, setUserTemplates] = useState<TemplateSummary[]>([]);
   const [selectedUserTemplateIds, setSelectedUserTemplateIds] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [sourcePreview, setSourcePreview] = useState<TablePreview | null>(null);
-  const [sourcePreviewMode, setSourcePreviewMode] = useState<"csv" | "json">("csv");
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [sourceSortKey, setSourceSortKey] = useState("");
-  const [sourceSortDir, setSourceSortDir] = useState<"asc" | "desc">("asc");
-  const [sourcePage, setSourcePage] = useState(1);
-  const [sourcePageSize, setSourcePageSize] = useState(5);
   const [sourceNotice, setSourceNotice] = useState<string>("");
-  const [valuePolicy, setValuePolicy] = useState<"drop" | "clamp">("drop");
-  const [valueMinWhenClamped, setValueMinWhenClamped] = useState(1);
-  const [sourceFileName, setSourceFileName] = useState<string>("");
   const [sourceError, setSourceError] = useState<string>("");
-  const [pastedCsv, setPastedCsv] = useState<string>("");
-  const [pastedJson, setPastedJson] = useState<string>("");
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [canvasResetKey, setCanvasResetKey] = useState(0);
@@ -456,48 +343,18 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const [leftWorkbenchMode, setLeftWorkbenchMode] = useState<LeftWorkbenchMode>(loadLeftWorkbenchModeFromStorage);
   const leftWorkbenchVisible = leftWorkbenchMode !== "collapsed";
   const [activeWorkspaceOverlay, setActiveWorkspaceOverlay] = useState<ActiveWorkspaceOverlay>("none");
-  const [mappingPresets, setMappingPresets] = useState<MappingPreset[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(MAPPING_PRESETS_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as MappingPreset[];
-      return parsed.filter(
-        (item) =>
-          typeof item.id === "string" &&
-          typeof item.name === "string" &&
-          (item.mode === "csv" || item.mode === "json") &&
-          typeof item.mapping?.source === "string" &&
-          typeof item.mapping?.target === "string" &&
-          typeof item.mapping?.value === "string",
-      );
-    } catch {
-      return [];
-    }
-  });
-  const [customStylePresets, setCustomStylePresets] = useState<StylePreset[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(STYLE_PRESET_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as StylePreset[];
-      return parsed.filter(
-        (item) =>
-          typeof item.id === "string" &&
-          typeof item.name === "string" &&
-          typeof item.style === "object" &&
-          typeof item.style?.theme === "string" &&
-          typeof item.style?.palette === "string",
-      );
-    } catch {
-      return [];
-    }
-  });
-  const [newStylePresetName, setNewStylePresetName] = useState("");
   const [autoLayoutStrategy, setAutoLayoutStrategy] = useState<AutoLayoutStrategy>("reset");
-  const [showShortcutHints, setShowShortcutHints] = useState(false);
   const [canvasActionIssue, setCanvasActionIssue] = useState<AppIssue | null>(null);
   const [exportIssues, setExportIssues] = useState<AppIssue[]>([]);
+  const [activeEditorModal, setActiveEditorModal] = useState<ActiveEditorModal>(null);
+  const [linkEditDraft, setLinkEditDraft] = useState<LinkEditDraft | null>(null);
+  const [nodeEditDraft, setNodeEditDraft] = useState<NodeEditDraft | null>(null);
+  const [editorModalError, setEditorModalError] = useState<string | null>(null);
+  const [editorModalAnchor, setEditorModalAnchor] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [pulseLinkIndex, setPulseLinkIndex] = useState<number | null>(null);
+  const [pulseNodeId, setPulseNodeId] = useState<string | null>(null);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showViewMenu, setShowViewMenu] = useState(false);
   const [showLabelsMenu, setShowLabelsMenu] = useState(false);
@@ -512,6 +369,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   const autoLayoutMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceQuickMenuRef = useRef<HTMLDivElement | null>(null);
+  const rawImportInputRef = useRef<HTMLInputElement | null>(null);
   const viewportRangeRef = useRef<"wide" | "medium" | "narrow">(
     viewportRange(typeof window === "undefined" ? 1600 : window.innerWidth),
   );
@@ -549,32 +407,56 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     redo,
   } = useEditorStore();
 
+  const alignDocThemeWithPreference = useCallback((doc: SankeyDocument): SankeyDocument => {
+    const preferredTheme = appPreferences.defaultTheme;
+    if (doc.style.theme === preferredTheme) return doc;
+    const prevDefaultLabelColor = doc.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+    const nextDefaultLabelColor = preferredTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+    return {
+      ...doc,
+      style: {
+        ...doc.style,
+        theme: preferredTheme,
+        // Only auto-switch label color when it was still using the old default.
+        labelColor: doc.style.labelColor === prevDefaultLabelColor
+          ? nextDefaultLabelColor
+          : doc.style.labelColor,
+      },
+    };
+  }, [appPreferences.defaultTheme]);
+
   useEffect(() => {
     let mounted = true;
-    loadAppPreferences().then((prefs) => {
-      if (!mounted) return;
-      setAppPreferences(prefs);
-      setPerformanceMode(prefs.defaultPerformanceMode);
-      if (!initialExportSettings.hasSaved) {
-        setExportTransparentBg(prefs.defaultExportTransparentBg);
-        setExportFileTemplate(prefs.defaultExportFileTemplate);
-      }
-    });
+    loadAppPreferences()
+      .then((prefs) => {
+        if (!mounted) return;
+        setAppPreferences(prefs);
+        setPerformanceMode(prefs.defaultPerformanceMode);
+        if (!initialExportSettings.hasSaved) {
+          setExportTransparentBg(prefs.defaultExportTransparentBg);
+          setExportFileTemplate(prefs.defaultExportFileTemplate);
+        }
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setIsAppPreferencesReady(true);
+      });
     return () => {
       mounted = false;
     };
   }, [initialExportSettings.hasSaved]);
 
   useEffect(() => {
+    if (!isAppPreferencesReady) return;
     let isMounted = true;
     async function bootstrap() {
       const template = templateById(templateId) ?? (templateId ? await loadUserTemplateById(templateId) : undefined);
       if (template) {
-        const nextDoc = {
+        const nextDoc = alignDocThemeWithPreference({
           ...template.document,
           id: crypto.randomUUID(),
           updatedAt: Date.now(),
-        };
+        });
         initialize(nextDoc);
         await upsertDocument(nextDoc);
         await setCurrentDocumentId(nextDoc.id);
@@ -586,8 +468,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
       if (docId) {
         const byId = await loadDocumentById(docId);
         if (byId) {
-          initialize(byId);
-          await setCurrentDocumentId(byId.id);
+          const themedDoc = alignDocThemeWithPreference(byId);
+          initialize(themedDoc);
+          await setCurrentDocumentId(themedDoc.id);
           if (isMounted) setHasHydrated(true);
           return;
         }
@@ -595,8 +478,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
       const current = await loadCurrentDocument();
       if (current) {
-        initialize(current);
-        await setCurrentDocumentId(current.id);
+        const themedDoc = alignDocThemeWithPreference(current);
+        initialize(themedDoc);
+        await setCurrentDocumentId(themedDoc.id);
       } else {
         const newDoc = {
           ...blankDocument,
@@ -614,7 +498,15 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     return () => {
       isMounted = false;
     };
-  }, [appPreferences.defaultTheme, docId, initialize, setHasHydrated, templateId]);
+  }, [
+    alignDocThemeWithPreference,
+    appPreferences.defaultTheme,
+    docId,
+    initialize,
+    isAppPreferencesReady,
+    setHasHydrated,
+    templateId,
+  ]);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -843,12 +735,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
         return;
       }
 
-      if (event.shiftKey && lower === "?" && !event.ctrlKey && !event.metaKey) {
-        event.preventDefault();
-        setShowShortcutHints((value) => !value);
-        return;
-      }
-
       if (!editing && event.key === "Escape") {
         clearSelection();
         setCanvasActionIssue({
@@ -977,22 +863,9 @@ export function EditorWorkspace({ templateId, docId }: Props) {
   ]);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      MAPPING_PRESETS_STORAGE_KEY,
-      JSON.stringify(mappingPresets),
-    );
-  }, [mappingPresets]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      STYLE_PRESET_STORAGE_KEY,
-      JSON.stringify(customStylePresets),
-    );
-  }, [customStylePresets]);
-
-  useEffect(() => {
+    if (!isAppPreferencesReady) return;
     void saveAppPreferences(appPreferences);
-  }, [appPreferences]);
+  }, [appPreferences, isAppPreferencesReady]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -1055,14 +928,25 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     }
   }, [graph.links.length, selectedLinkIndex, setSelectedLinkIndex]);
 
-  const fileHint = useMemo(() => {
-    return currentDoc.format === "json" ? "JSON: array or { links: [] }" : "CSV: source,target,value";
-  }, [currentDoc.format]);
+  useEffect(() => {
+    if (!activeEditorModal) return;
+    if (activeEditorModal.type === "link") {
+      if (activeEditorModal.index < 0 || activeEditorModal.index >= graph.links.length) {
+        closeEditorModal();
+      }
+      return;
+    }
+    const exists = graph.nodes.some((node) => node.id === activeEditorModal.id);
+    if (!exists) {
+      closeEditorModal();
+    }
+  }, [activeEditorModal, graph.links.length, graph.nodes]);
 
-  const pastedJsonResult = useMemo(() => {
-    if (!pastedJson.trim()) return null;
-    return parseSankeyTextDetailed(pastedJson, "json");
-  }, [pastedJson]);
+  const fileHint = useMemo(() => {
+    return currentDoc.format === "json"
+      ? "JSON/DSL: array, { links: [] }, or A [10] B"
+      : "CSV: source,target,value";
+  }, [currentDoc.format]);
 
   const sourceIssues = useMemo<AppIssue[]>(() => {
     const issues: AppIssue[] = [];
@@ -1125,10 +1009,22 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     return base.length > 0 ? base : safeTitle;
   }, [currentDoc.title, exportFileTemplate]);
   const exportSolidBackground = currentDoc.style.theme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
+  const effectiveExportBackground = useMemo(() => {
+    if (!svgElement) return exportSolidBackground;
+    const container = svgElement.parentElement?.parentElement;
+    if (!container) return exportSolidBackground;
+    const bg = getComputedStyle(container).backgroundColor;
+    if (isTransparentColor(bg)) return exportSolidBackground;
+    return bg;
+  }, [exportSolidBackground, svgElement]);
 
   const exportSvgString = useMemo(() => {
     if (!svgElement) return "";
     const cloned = svgElement.cloneNode(true) as SVGSVGElement;
+    const rootComputed = getComputedStyle(document.documentElement);
+    const svgComputed = getComputedStyle(svgElement);
+    const lookupVar = (name: string) =>
+      svgComputed.getPropertyValue(name) || rootComputed.getPropertyValue(name) || null;
 
     const clampedPadding = Math.max(0, Math.min(300, exportPadding));
     const innerWidth = Math.max(1, exportWidth - clampedPadding * 2);
@@ -1156,128 +1052,43 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     cloned.setAttribute("height", String(exportHeight));
     cloned.appendChild(contentGroup);
 
+    const colorAttrs = ["fill", "stroke", "stop-color", "color"];
+    const allElements = [cloned, ...Array.from(cloned.querySelectorAll("*"))];
+    for (const element of allElements) {
+      for (const attr of colorAttrs) {
+        const raw = element.getAttribute(attr);
+        if (!raw || !raw.includes("var(")) continue;
+        const resolved = resolveCssVarsInValue(raw, lookupVar);
+        if (resolved) {
+          element.setAttribute(attr, resolved);
+        } else {
+          element.removeAttribute(attr);
+        }
+      }
+      const styleAttr = element.getAttribute("style");
+      if (styleAttr && styleAttr.includes("var(")) {
+        element.setAttribute("style", resolveCssVarsInValue(styleAttr, lookupVar));
+      }
+    }
+
     if (!exportTransparentBg) {
       const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       background.setAttribute("x", "0");
       background.setAttribute("y", "0");
       background.setAttribute("width", String(exportWidth));
       background.setAttribute("height", String(exportHeight));
-      background.setAttribute("fill", exportSolidBackground);
+      background.setAttribute("fill", effectiveExportBackground);
       cloned.insertBefore(background, cloned.firstChild);
     }
     return new XMLSerializer().serializeToString(cloned);
   }, [
-    exportSolidBackground,
+    effectiveExportBackground,
     exportHeight,
     exportPadding,
     exportTransparentBg,
     exportWidth,
     svgElement,
   ]);
-
-  const filteredSortedRows = useMemo(() => {
-    if (!sourcePreview) return [];
-    const keyword = sourceFilter.trim().toLowerCase();
-
-    let rows = sourcePreview.rows;
-    if (keyword) {
-      rows = rows.filter((row) =>
-        sourcePreview.headers.some((header) =>
-          String(row[header] ?? "").toLowerCase().includes(keyword),
-        ),
-      );
-    }
-
-    const sortKey = sourceSortKey || sourcePreview.headers[0];
-    if (!sortKey) return rows;
-
-    const sorted = [...rows].sort((a, b) => {
-      const av = String(a[sortKey] ?? "");
-      const bv = String(b[sortKey] ?? "");
-      const an = Number(av);
-      const bn = Number(bv);
-      const numeric = Number.isFinite(an) && Number.isFinite(bn);
-      if (numeric) {
-        return sourceSortDir === "asc" ? an - bn : bn - an;
-      }
-      const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" });
-      return sourceSortDir === "asc" ? cmp : -cmp;
-    });
-    return sorted;
-  }, [sourceFilter, sourcePreview, sourceSortDir, sourceSortKey]);
-
-  const paginatedRows = useMemo(() => {
-    if (!sourcePreview) return [];
-    const start = (sourcePage - 1) * sourcePageSize;
-    return filteredSortedRows.slice(start, start + sourcePageSize);
-  }, [filteredSortedRows, sourcePage, sourcePageSize, sourcePreview]);
-
-  const totalSourcePages = useMemo(() => {
-    return Math.max(1, Math.ceil(filteredSortedRows.length / sourcePageSize));
-  }, [filteredSortedRows.length, sourcePageSize]);
-
-  const allStylePresets = useMemo(
-    () => [...DEFAULT_STYLE_PRESETS, ...customStylePresets],
-    [customStylePresets],
-  );
-  const mappingPresetsForMode = useMemo(
-    () => mappingPresets.filter((item) => item.mode === sourcePreviewMode),
-    [mappingPresets, sourcePreviewMode],
-  );
-
-  const sourceMappingIssues = useMemo(() => {
-    if (!sourcePreview) return [] as string[];
-    const issues: string[] = [];
-    const headers = new Set(sourcePreview.headers);
-    const { source, target, value } = sourcePreview.mapping;
-
-    if (!source || !headers.has(source)) {
-      issues.push('Source column "' + (source || '(empty)') + '" is missing in current data.');
-    }
-    if (!target || !headers.has(target)) {
-      issues.push('Target column "' + (target || '(empty)') + '" is missing in current data.');
-    }
-    if (!value || !headers.has(value)) {
-      issues.push('Value column "' + (value || '(empty)') + '" is missing in current data.');
-    }
-    if (new Set([source, target, value]).size < 3) {
-      issues.push('Source, target, and value should map to three different columns.');
-    }
-
-    return issues;
-  }, [sourcePreview]);
-
-  const mappingTransformPreview = useMemo(() => {
-    if (!sourcePreview) return null;
-    if (sourceMappingIssues.length > 0) return null;
-    return transformRowsToCanonicalLinks(sourcePreview.rows, sourcePreview.mapping, {
-      valuePolicy,
-      minValue: valueMinWhenClamped,
-    });
-  }, [sourcePreview, sourceMappingIssues, valuePolicy, valueMinWhenClamped]);
-
-  const canApplyMapping =
-    mappingTransformPreview != null && mappingTransformPreview.stats.outputRows > 0;
-
-
-  const presetCompatibilityById = useMemo(() => {
-    const status = new Map<string, { ok: boolean; reason: string }>();
-    if (!sourcePreview) return status;
-    const headers = new Set(sourcePreview.headers);
-
-    mappingPresetsForMode.forEach((preset) => {
-      const missing = [preset.mapping.source, preset.mapping.target, preset.mapping.value].filter(
-        (column) => !headers.has(column),
-      );
-      if (missing.length > 0) {
-        status.set(preset.id, { ok: false, reason: 'Missing columns: ' + missing.join(', ') });
-        return;
-      }
-      status.set(preset.id, { ok: true, reason: '' });
-    });
-
-    return status;
-  }, [mappingPresetsForMode, sourcePreview]);
 
   const graphMetrics = useMemo(
     () => ({ nodes: graph.nodes.length, links: graph.links.length }),
@@ -1370,6 +1181,208 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     });
   };
 
+  const nodeIdOptions = useMemo(
+    () => graph.nodes.map((node) => node.id).sort((a, b) => a.localeCompare(b)),
+    [graph.nodes],
+  );
+
+  const nodeStatsById = useMemo(() => {
+    const stats = new Map<
+      string,
+      {
+        incomingCount: number;
+        outgoingCount: number;
+        incomingValue: number;
+        outgoingValue: number;
+      }
+    >();
+    graph.nodes.forEach((node) => {
+      stats.set(node.id, {
+        incomingCount: 0,
+        outgoingCount: 0,
+        incomingValue: 0,
+        outgoingValue: 0,
+      });
+    });
+    graph.links.forEach((link) => {
+      const source = stats.get(link.source);
+      if (source) {
+        source.outgoingCount += 1;
+        source.outgoingValue += link.value;
+      }
+      const target = stats.get(link.target);
+      if (target) {
+        target.incomingCount += 1;
+        target.incomingValue += link.value;
+      }
+    });
+    return stats;
+  }, [graph.links, graph.nodes]);
+
+  const linkDraftValidationError = useMemo(() => {
+    if (!linkEditDraft) return null;
+    const source = linkEditDraft.source.trim();
+    const target = linkEditDraft.target.trim();
+    const value = Number(linkEditDraft.value);
+    if (!source || !target) return "From and To are required.";
+    if (source === target) return "From and To cannot be the same node.";
+    if (!Number.isFinite(value) || value <= 0) return "Value must be a positive number.";
+    return null;
+  }, [linkEditDraft]);
+
+  const nodeDraftValidationError = useMemo(() => {
+    if (!nodeEditDraft) return null;
+    const nextId = nodeEditDraft.nextId.trim();
+    if (!nextId) return "Node name cannot be empty.";
+    if (
+      nextId !== nodeEditDraft.id &&
+      graph.nodes.some((node) => node.id.toLowerCase() === nextId.toLowerCase())
+    ) {
+      return "A node with this name already exists.";
+    }
+    return null;
+  }, [graph.nodes, nodeEditDraft]);
+
+  const closeEditorModal = () => {
+    setActiveEditorModal(null);
+    setLinkEditDraft(null);
+    setNodeEditDraft(null);
+    setEditorModalAnchor(null);
+    setEditorModalError(null);
+  };
+
+  const openLinkEditor = (index: number, anchor?: { x: number; y: number }) => {
+    const link = graph.links[index];
+    if (!link) return;
+    setSelectedLinkIndex(index);
+    setLinkEditDraft({
+      source: link.source,
+      target: link.target,
+      value: link.value,
+    });
+    setNodeEditDraft(null);
+    setEditorModalError(null);
+    setEditorModalAnchor(anchor ?? null);
+    setActiveEditorModal({ type: "link", index });
+  };
+
+  const openNodeEditor = (nodeId: string, anchor?: { x: number; y: number }) => {
+    const exists = graph.nodes.some((node) => node.id === nodeId);
+    if (!exists) return;
+    setSelectedNodeIds([nodeId]);
+    setNodeEditDraft({
+      id: nodeId,
+      nextId: nodeId,
+    });
+    setLinkEditDraft(null);
+    setEditorModalError(null);
+    setEditorModalAnchor(anchor ?? null);
+    setActiveEditorModal({ type: "node", id: nodeId });
+  };
+
+  const applyNextLinksToEditor = (
+    nextLinks: EditableLink[],
+    successTitle: string,
+    successDescription?: string,
+  ) => {
+    const nextText = serializeLinksByFormat(nextLinks, currentDoc.format);
+    clearNodePositions();
+    setEditorText(nextText);
+    if (activeEditorModal?.type === "link") {
+      setPulseLinkIndex(activeEditorModal.index);
+      setPulseNodeId(null);
+    }
+    if (activeEditorModal?.type === "node") {
+      setPulseNodeId(nodeEditDraft?.nextId.trim() || nodeEditDraft?.id || null);
+      setPulseLinkIndex(null);
+    }
+    closeEditorModal();
+    if (autoSync) {
+      pushCanvasActionIssue("success", successTitle, successDescription);
+      return;
+    }
+    pushCanvasActionIssue(
+      "info",
+      `${successTitle} (Text Updated)`,
+      "Auto-sync is off. Press Sync to refresh the graph.",
+    );
+  };
+
+  const saveLinkEdit = () => {
+    if (!activeEditorModal || activeEditorModal.type !== "link" || !linkEditDraft) return;
+    if (linkDraftValidationError) {
+      setEditorModalError(linkDraftValidationError);
+      return;
+    }
+    const source = linkEditDraft.source.trim();
+    const target = linkEditDraft.target.trim();
+    const value = Number(linkEditDraft.value);
+
+    const nextLinks = graph.links.map((link, index) =>
+      index === activeEditorModal.index ? { source, target, value } : { ...link },
+    );
+    applyNextLinksToEditor(nextLinks, "Flow updated", `${source} -> ${target}`);
+  };
+
+  const jumpToRelatedLink = (mode: "source" | "target") => {
+    if (!activeEditorModal || activeEditorModal.type !== "link") return;
+    const current = graph.links[activeEditorModal.index];
+    if (!current) return;
+    const matchIndices = graph.links
+      .map((link, index) => ({ link, index }))
+      .filter(({ link, index }) => {
+        if (index === activeEditorModal.index) return false;
+        return mode === "source"
+          ? link.source === current.source
+          : link.target === current.target;
+      })
+      .map(({ index }) => index)
+      .sort((a, b) => a - b);
+    if (matchIndices.length === 0) return;
+    const next =
+      matchIndices.find((index) => index > activeEditorModal.index) ?? matchIndices[0];
+    openLinkEditor(next, editorModalAnchor ?? undefined);
+  };
+
+  const deleteLinkEdit = () => {
+    if (!activeEditorModal || activeEditorModal.type !== "link") return;
+    const targetLink = graph.links[activeEditorModal.index];
+    const nextLinks = graph.links
+      .filter((_, index) => index !== activeEditorModal.index)
+      .map((link) => ({ ...link }));
+    applyNextLinksToEditor(
+      nextLinks,
+      "Flow removed",
+      targetLink ? `${targetLink.source} -> ${targetLink.target}` : undefined,
+    );
+  };
+
+  const saveNodeEdit = () => {
+    if (!activeEditorModal || activeEditorModal.type !== "node" || !nodeEditDraft) return;
+    if (nodeDraftValidationError) {
+      setEditorModalError(nodeDraftValidationError);
+      return;
+    }
+    const nextId = nodeEditDraft.nextId.trim();
+    const originalId = nodeEditDraft.id;
+
+    const nextLinks = graph.links.map((link) => ({
+      source: link.source === originalId ? nextId : link.source,
+      target: link.target === originalId ? nextId : link.target,
+      value: link.value,
+    }));
+    applyNextLinksToEditor(nextLinks, "Node renamed", `${originalId} -> ${nextId}`);
+  };
+
+  useEffect(() => {
+    if (pulseLinkIndex == null && !pulseNodeId) return;
+    const timer = window.setTimeout(() => {
+      setPulseLinkIndex(null);
+      setPulseNodeId(null);
+    }, 620);
+    return () => window.clearTimeout(timer);
+  }, [pulseLinkIndex, pulseNodeId]);
+
   const applyAutoLayoutStrategy = (strategy: AutoLayoutStrategy, source: "toolbar" | "shortcut" = "toolbar") => {
     if (strategy === "reset") {
       clearNodePositions();
@@ -1394,51 +1407,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     if (selectedNodeIds.length === 0 && selectedLinkIndex == null) return;
     clearSelection();
     pushCanvasActionIssue("info", "Selection cleared");
-  };
-
-  const saveCurrentStylePreset = async () => {
-    const candidate = newStylePresetName.trim() || `${currentDoc.title || "Untitled"} Style`;
-    const existing = customStylePresets.find(
-      (preset) => preset.name.toLowerCase() === candidate.toLowerCase(),
-    );
-
-    if (existing) {
-      const overwrite = await confirm({
-        title: "Overwrite style preset?",
-        message: `Preset "${candidate}" already exists.`,
-        confirmLabel: "Overwrite",
-      });
-      if (!overwrite) return;
-    }
-
-    const preset: StylePreset = {
-      id: existing?.id ?? `style-${crypto.randomUUID()}`,
-      name: candidate,
-      style: { ...currentDoc.style },
-    };
-
-    setCustomStylePresets((prev) => [preset, ...prev.filter((item) => item.id !== preset.id)]);
-    setNewStylePresetName("");
-    pushCanvasActionIssue("success", `Saved style preset: ${candidate}`);
-  };
-
-  const applyStylePreset = (preset: StylePreset) => {
-    patchStyle({ ...preset.style });
-    pushCanvasActionIssue("success", `Applied style preset: ${preset.name}`);
-  };
-
-  const removeStylePreset = async (presetId: string) => {
-    const target = customStylePresets.find((preset) => preset.id === presetId);
-    if (!target) return;
-    const confirmed = await confirm({
-      title: "Delete style preset?",
-      message: `This action cannot be undone. Delete "${target.name}"?`,
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    setCustomStylePresets((prev) => prev.filter((preset) => preset.id !== presetId));
-    pushCanvasActionIssue("warning", `Deleted style preset: ${target.name}`);
   };
 
   const validateExportRequest = (target: "svg" | "png" | "html" | "all") => {
@@ -1589,7 +1557,7 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     const baseName = customBaseName ?? resolvedExportBaseName;
     const bodyStyle = exportTransparentBg
       ? "margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;"
-      : `margin:0;background:${exportSolidBackground};display:flex;justify-content:center;align-items:center;min-height:100vh;`;
+      : `margin:0;background:${effectiveExportBackground};display:flex;justify-content:center;align-items:center;min-height:100vh;`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${currentDoc.title}</title></head><body style="${bodyStyle}">${serialized}</body></html>`;
     downloadFile(`${baseName}.html`, "text/html;charset=utf-8", html);
   };
@@ -1616,10 +1584,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           resolve();
           return;
         }
-        if (!exportTransparentBg) {
-          context.fillStyle = exportSolidBackground;
-          context.fillRect(0, 0, canvas.width, canvas.height);
-        }
+        // Keep PNG export WYSIWYG: always flatten with the resolved background color.
+        // Transparent PNG previews often look black in file explorers.
+        context.fillStyle = effectiveExportBackground;
+        context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
         const png = canvas.toDataURL("image/png");
         const anchor = document.createElement("a");
@@ -1663,253 +1631,97 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     }
   };
 
-  const applyUploadedFile = async (file: File) => {
-    const detected = detectFileFormat(file.name);
-    if (!detected) {
-      setSourceError("Only CSV, JSON, XLSX are supported.");
+  const applyRawInputToEditor = (text: string) => {
+    const candidate = text.trim();
+    if (!candidate) {
+      setSourceError("Input is empty.");
+      setSourceNotice("");
       return;
     }
 
+    const isJsonCandidate = looksLikeJson(candidate);
+    const isCsvCandidate = looksLikeCsv(candidate);
+    const isDslCandidate = !isJsonCandidate && !isCsvCandidate && looksLikeDsl(candidate);
+
+    const jsonResult = parseSankeyTextDetailed(candidate, "json");
+    const csvResult = parseSankeyTextDetailed(candidate, "csv");
+
+    let formatToApply: DataFormat | null = null;
+    let parseResult = jsonResult;
+    let detected = "DSL";
+
+    if (isJsonCandidate && jsonResult.ok) {
+      formatToApply = "json";
+      parseResult = jsonResult;
+      detected = "JSON";
+    } else if (isCsvCandidate && csvResult.ok) {
+      formatToApply = "csv";
+      parseResult = csvResult;
+      detected = "CSV";
+    } else if (jsonResult.ok) {
+      formatToApply = isDslCandidate ? "json" : "json";
+      parseResult = jsonResult;
+      detected = isDslCandidate ? "DSL" : "JSON";
+    } else if (csvResult.ok) {
+      formatToApply = "csv";
+      parseResult = csvResult;
+      detected = "CSV";
+    } else {
+      const issue = jsonResult.issue ?? csvResult.issue;
+      setSourceError(
+        `${issue.message}${issue.line ? ` (Ln ${issue.line}, Col ${issue.column})` : ""}`,
+      );
+      setSourceNotice("");
+      return;
+    }
+
+    if (!formatToApply || !parseResult.ok) return;
+
+    clearNodePositions();
+    setFormat(formatToApply);
+    setEditorText(candidate);
     setSourceError("");
-    setSourceNotice("");
-    setSourceFileName(file.name);
-
-    if (detected === "json") {
-      const text = await file.text();
-      const preview = parseJsonPreview(text);
-      setSourcePreview(preview);
-      setSourcePreviewMode("json");
-      setSourceSortKey(preview.headers[0] ?? "");
-      setSourceSortDir("asc");
-      setSourceFilter("");
-      setSourcePage(1);
-      setPastedJson(text);
-      setActiveTab("source");
-      return;
-    }
-
-    if (detected === "csv") {
-      const text = await file.text();
-      const preview = parseCsvPreview(text);
-      setSourcePreview(preview);
-      setSourcePreviewMode("csv");
-      setSourceSortKey(preview.headers[0] ?? "");
-      setSourceSortDir("asc");
-      setSourceFilter("");
-      setSourcePage(1);
-      return;
-    }
-
-    const buffer = await file.arrayBuffer();
-    const preview = parseXlsxPreview(buffer);
-    setSourcePreview(preview);
-    setSourcePreviewMode("csv");
-    setSourceSortKey(preview.headers[0] ?? "");
-    setSourceSortDir("asc");
-    setSourceFilter("");
-    setSourcePage(1);
+    setSourceNotice(
+      `Detected ${detected}: ${parseResult.graph.nodes.length} nodes, ${parseResult.graph.links.length} links.`,
+    );
+    setActiveTab("editor");
   };
 
-  const onFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+  const importRawFile = async (file: File) => {
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".csv") && !lower.endsWith(".json") && !lower.endsWith(".txt") && !lower.endsWith(".dsl")) {
+      setSourceError("Only .csv, .json, .txt, .dsl are supported in quick import.");
+      setSourceNotice("");
+      return;
+    }
+    const text = await file.text();
+    applyRawInputToEditor(text);
+  };
+
+  const onRawFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      await applyUploadedFile(file);
+      await importRawFile(file);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Failed to parse file");
+      setSourceNotice("");
+    } finally {
+      if (rawImportInputRef.current) rawImportInputRef.current.value = "";
     }
   };
 
-  const onDrop = async (event: DragEvent<HTMLLabelElement>) => {
+  const onRawDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragOver(false);
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
     try {
-      await applyUploadedFile(file);
+      await importRawFile(file);
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Failed to parse file");
-    }
-  };
-
-  const applyMappingToEditor = () => {
-    if (!sourcePreview) return;
-    if (sourceMappingIssues.length > 0) {
-      setSourceError(sourceMappingIssues[0]);
-      return;
-    }
-    if (!mappingTransformPreview || mappingTransformPreview.stats.outputRows === 0) {
-      setSourceError("No valid rows left after applying import policy.");
-      return;
-    }
-
-    const transformed = mappingTransformPreview;
-    const text =
-      sourcePreviewMode === "json"
-        ? linksToCanonicalJson(transformed.links)
-        : linksToCanonicalCsv(transformed.links);
-
-    setSourceError("");
-    setSourceNotice(
-      `Imported ${transformed.stats.outputRows}/${transformed.stats.totalRows} rows` +
-        (transformed.stats.droppedRows > 0
-          ? `, dropped ${transformed.stats.droppedRows}`
-          : "") +
-        (transformed.stats.clampedRows > 0
-          ? `, clamped ${transformed.stats.clampedRows}`
-          : ""),
-    );
-    clearNodePositions();
-    setFormat(sourcePreviewMode === "json" ? "json" : "csv");
-    setEditorText(text);
-    setActiveTab("editor");
-  };
-
-  const updateSourceMapping = (key: keyof TableMapping, value: string) => {
-    if (!sourcePreview) return;
-    setSourcePreview({
-      ...sourcePreview,
-      mapping: { ...sourcePreview.mapping, [key]: value },
-    });
-    setSourceError("");
-    setSourceNotice("");
-  };
-
-  const saveMappingPreset = async () => {
-    if (!sourcePreview) return;
-    if (sourceMappingIssues.length > 0) {
-      setSourceError(sourceMappingIssues[0]);
-      return;
-    }
-    const suggested = `${sourcePreviewMode.toUpperCase()} Mapping`;
-    const entered = await prompt({
-      title: "Save mapping preset",
-      message: "Enter preset name",
-      defaultValue: suggested,
-      confirmLabel: "Save",
-    });
-    const name = entered?.trim();
-    if (!name) return;
-    const existing = mappingPresets.find(
-      (item) =>
-        item.mode === sourcePreviewMode &&
-        item.name.toLowerCase() === name.toLowerCase(),
-    );
-    let id = `map-${crypto.randomUUID()}`;
-    if (existing) {
-      const overwrite = await confirm({
-        title: "Overwrite mapping preset?",
-        message: `Preset "${name}" already exists.`,
-        confirmLabel: "Overwrite",
-      });
-      if (!overwrite) return;
-      id = existing.id;
-    }
-    const preset: MappingPreset = {
-      id,
-      name,
-      mode: sourcePreviewMode,
-      mapping: sourcePreview.mapping,
-      createdAt: Date.now(),
-    };
-    setMappingPresets((prev) => [preset, ...prev.filter((item) => item.id !== preset.id)]);
-  };
-
-  const applyMappingPreset = (presetId: string) => {
-    if (!sourcePreview) return;
-    const preset = mappingPresets.find((item) => item.id === presetId);
-    if (!preset) return;
-    if (preset.mode !== sourcePreviewMode) {
-      setSourceError("Preset mode does not match current preview mode.");
-      return;
-    }
-    const headers = new Set(sourcePreview.headers);
-    const valid =
-      headers.has(preset.mapping.source) &&
-      headers.has(preset.mapping.target) &&
-      headers.has(preset.mapping.value);
-    if (!valid) {
-      setSourceError("Preset columns are not present in current data headers.");
-      return;
-    }
-    setSourceError("");
-    setSourceNotice(`Applied mapping preset: ${preset.name}`);
-    setSourcePreview({ ...sourcePreview, mapping: preset.mapping });
-  };
-
-  const removeMappingPreset = (presetId: string) => {
-    setMappingPresets((prev) => prev.filter((item) => item.id !== presetId));
-  };
-
-  const previewPastedCsv = () => {
-    if (!pastedCsv.trim()) {
-      setSourceError("Paste CSV content before preview.");
-      return;
-    }
-    try {
-      const preview = parseCsvPreview(pastedCsv);
-      setSourceError("");
+      setSourceError(error instanceof Error ? error.message : "Failed to parse dropped file");
       setSourceNotice("");
-      setSourceFileName("Pasted CSV");
-      setSourcePreview(preview);
-      setSourcePreviewMode("csv");
-      setSourceSortKey(preview.headers[0] ?? "");
-      setSourceSortDir("asc");
-      setSourceFilter("");
-      setSourcePage(1);
-    } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Failed to parse pasted CSV");
     }
-  };
-
-  const previewPastedJson = () => {
-    if (!pastedJson.trim()) {
-      setSourceError("Paste JSON content before preview.");
-      return;
-    }
-    try {
-      const preview = parseJsonPreview(pastedJson);
-      setSourceError("");
-      setSourceNotice("");
-      setSourceFileName("Pasted JSON");
-      setSourcePreview(preview);
-      setSourcePreviewMode("json");
-      setSourceSortKey(preview.headers[0] ?? "");
-      setSourceSortDir("asc");
-      setSourceFilter("");
-      setSourcePage(1);
-    } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Failed to parse pasted JSON");
-    }
-  };
-
-  const applyPastedJsonToEditor = () => {
-    if (!pastedJsonResult || !pastedJsonResult.ok) {
-      setSourceError("JSON is invalid. Fix errors before applying.");
-      return;
-    }
-    setSourceError("");
-    setSourceNotice("");
-    setSourceFileName("Pasted JSON");
-    clearNodePositions();
-    if (sourcePreview && sourcePreviewMode === "json") {
-      const mappedJson = rowsToCanonicalJson(sourcePreview.rows, sourcePreview.mapping);
-      setFormat("json");
-      setEditorText(mappedJson);
-    } else {
-      setFormat("json");
-      setEditorText(pastedJson);
-    }
-    setActiveTab("editor");
-  };
-
-  const toggleSortBy = (header: string) => {
-    if (sourceSortKey === header) {
-      setSourceSortDir((direction) => (direction === "asc" ? "desc" : "asc"));
-      return;
-    }
-    setSourceSortKey(header);
-    setSourceSortDir("asc");
   };
 
   const openDocumentById = async (nextDocId: string) => {
@@ -2150,17 +1962,10 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     "glass absolute left-4 top-16 z-40 w-96 rounded-xl border border-[var(--border-base)] bg-[color:color-mix(in_srgb,var(--bg-elevated)_96%,transparent)] p-3 shadow-xl";
   const rightPanelFieldCompactClass =
     "mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] text-slate-100";
-  const rightPanelCardClass =
-    "mt-2 rounded-lg border border-slate-600 bg-slate-900 p-2";
-  const rightPanelInlineFieldClass =
-    "h-8 flex-1 rounded-lg border border-slate-600 bg-slate-900 px-2 text-xs text-slate-100";
-  const rightPanelActionButtonSmallClass =
-    "rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-xs font-medium text-slate-100 hover:bg-slate-800";
   const libraryActionButtonClass = buttonSecondaryTiny;
   const libraryActionButtonDisabledClass = withDisabled(buttonSecondaryTiny);
   const libraryDangerButtonClass = buttonDangerSoftTiny;
   const libraryDangerButtonDisabledClass = withDisabled(buttonDangerSoftTiny);
-  const sourcePrimaryActionClass = withDisabled(`w-full ${buttonPrimarySm}`);
   const libraryEmptyStateClass = "rounded-lg border border-dashed border-slate-600 bg-slate-900 px-2 py-3 text-center text-xs text-slate-400";
   const clearRecentDisabledReason = "No recent template history to clear.";
   const deleteSelectedDisabledReason = "Select at least one custom template first.";
@@ -2208,11 +2013,19 @@ export function EditorWorkspace({ templateId, docId }: Props) {
     <div className={workspaceClass}>
       <header className={headerClass}>
         <div className="flex items-center gap-3">
-          <LayoutTemplate className="h-5 w-5 text-blue-600" />
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-600 transition hover:bg-[var(--bg-tertiary)]"
+            title="Back to Home"
+            aria-label="Back to Home"
+          >
+            <LayoutTemplate className="h-5 w-5" />
+          </button>
           <input
             value={currentDoc.title}
             onChange={(event) => setTitle(event.target.value)}
-            className="w-72 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-semibold outline-none transition focus:border-[var(--primary)] focus:bg-[var(--bg-tertiary)]"
+            className="w-72 rounded-lg border-0 bg-transparent px-2 py-1 text-sm font-semibold outline-none ring-0 transition focus:border focus:border-[var(--primary)] focus:bg-[var(--bg-tertiary)]"
           />
           <div className="ml-2 flex items-center gap-1">
             <div className="relative" ref={fileMenuRef}>
@@ -2266,10 +2079,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                   <button onClick={() => { redo(); setShowViewMenu(false); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-3.5 w-3.5" />Redo</button>
                   <button onClick={() => { syncFromEditor(); setShowViewMenu(false); }} className={headerMenuItemClass}><Play className="h-3.5 w-3.5" />Sync</button>
                   <button onClick={() => { setCanvasResetKey((value) => value + 1); setShowViewMenu(false); }} className={headerMenuItemClass}>Fit Canvas</button>
-                  <button onClick={() => { setCanvasResetKey((value) => value + 1); clearSelection(); setTraceMode("none"); setShowViewMenu(false); }} className={headerMenuItemClass}>Reset View</button>
-                  <button onClick={() => { toggleLeftWorkbench(); setShowViewMenu(false); }} className={headerMenuItemClass}>{leftWorkbenchVisible ? "Hide Workbench" : "Show Workbench"}</button>
-                  <button onClick={() => { setShowShortcutHints((value) => !value); }} className={headerMenuItemClass}>{showShortcutHints ? "Hide" : "Show"} Shortcut Hints</button>
-                  <div className="px-2 py-1 text-[11px] text-[var(--text-tertiary)]">Hold Space to Pan</div>
                 </div>
               )}
             </div>
@@ -2337,13 +2146,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               </button>
               {showLayoutMenu && (
                 <div className={`${headerMenuClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
-                  <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Palette
-                    <select value={currentDoc.style.palette} onChange={(event) => patchStyle({ palette: event.target.value as "classic" | "ocean" | "sunset" })} className={rightPanelFieldCompactClass}>
-                      <option value="classic">Classic</option>
-                      <option value="ocean">Ocean</option>
-                      <option value="sunset">Sunset</option>
-                    </select>
-                  </label>
                   <label className="block px-2 py-1 text-xs text-[var(--text-secondary)]">Node Width
                     <input type="range" min={8} max={42} value={currentDoc.style.nodeWidth} onChange={(event) => patchStyle({ nodeWidth: Number(event.target.value) })} className="mt-1 w-full" />
                   </label>
@@ -2367,21 +2169,6 @@ export function EditorWorkspace({ templateId, docId }: Props) {
                       <button onClick={() => setTraceMode("downstream")} className={traceMode === "downstream" ? headerMenuItemActiveClass : headerMenuItemClass}>Downstream</button>
                     </div>
                     <button onClick={clearSelectionWithNotice} className={`mt-2 w-full ${headerMenuItemClass}`}>Clear Selection</button>
-                  </div>
-                  <div className="mt-1 border-t border-[var(--border-base)] p-2">
-                    <p className="mb-1 text-[11px] font-semibold text-[var(--text-secondary)]">Style Presets</p>
-                    <input value={newStylePresetName} onChange={(event) => setNewStylePresetName(event.target.value)} placeholder="Preset name" className={rightPanelInlineFieldClass} />
-                    <button onClick={() => void saveCurrentStylePreset()} className={`mt-1 w-full ${rightPanelActionButtonSmallClass}`}>Save Current</button>
-                    <div className="mt-2 space-y-1">
-                      {allStylePresets.map((preset) => (
-                        <div key={preset.id} className="flex items-center gap-1">
-                          <button onClick={() => applyStylePreset(preset)} className={`${rightPanelActionButtonSmallClass} flex-1 text-left`}>{preset.name}</button>
-                          {!preset.builtIn && (
-                            <button onClick={() => void removeStylePreset(preset.id)} className={headerMenuItemClass}>Delete</button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 </div>
               )}
@@ -2782,16 +2569,38 @@ export function EditorWorkspace({ templateId, docId }: Props) {
           style={{ width: leftWorkbenchWidth }}
         >
           <div className="p-2">
-            <div className="grid grid-cols-2 rounded-lg border border-slate-700 bg-slate-800/70 p-1 text-xs">
+            <div
+              className={`grid grid-cols-2 rounded-lg border p-1 text-xs ${
+                isDarkTheme
+                  ? "border-slate-700 bg-slate-800/70"
+                  : "border-slate-300 bg-slate-100/90"
+              }`}
+            >
               <button
                 onClick={() => setActiveTab("source")}
-                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "source" ? "bg-slate-700 text-slate-100 shadow" : "text-slate-400"}`}
+                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                  activeTab === "source"
+                    ? isDarkTheme
+                      ? "bg-slate-700 text-slate-100 shadow"
+                      : "bg-white text-slate-800 shadow"
+                    : isDarkTheme
+                      ? "text-slate-400 hover:text-slate-200"
+                      : "text-slate-500 hover:text-slate-700"
+                }`}
               >
-                Source
+                Import
               </button>
               <button
                 onClick={() => setActiveTab("editor")}
-                className={`rounded-md px-3 py-1.5 font-medium ${activeTab === "editor" ? "bg-slate-700 text-slate-100 shadow" : "text-slate-400"}`}
+                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                  activeTab === "editor"
+                    ? isDarkTheme
+                      ? "bg-slate-700 text-slate-100 shadow"
+                      : "bg-white text-slate-800 shadow"
+                    : isDarkTheme
+                      ? "text-slate-400 hover:text-slate-200"
+                      : "text-slate-500 hover:text-slate-700"
+                }`}
               >
                 Editor
               </button>
@@ -2800,370 +2609,46 @@ export function EditorWorkspace({ templateId, docId }: Props) {
 
           {activeTab === "source" ? (
             <div className="space-y-3 overflow-auto p-4">
-              <label
-                className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed p-8 text-center transition ${isDragOver ? "border-indigo-400 bg-indigo-500/12" : "border-slate-600 bg-slate-900/60 hover:border-indigo-400 hover:bg-indigo-500/10"}`}
+              <div
+                className={`rounded-xl border border-dashed p-5 text-center transition ${
+                  isDragOver
+                    ? "border-indigo-400 bg-indigo-500/12"
+                    : "border-slate-500/55 bg-slate-900/30 hover:border-indigo-400/70 hover:bg-indigo-500/8"
+                }`}
                 onDragOver={(event) => {
                   event.preventDefault();
                   setIsDragOver(true);
                 }}
                 onDragLeave={() => setIsDragOver(false)}
-                onDrop={onDrop}
+                onDrop={onRawDrop}
               >
-                <FileUp className="h-8 w-8 text-slate-400" />
-                <div>
-                  <p className="type-section text-sm font-medium text-slate-200">Upload CSV / JSON / XLSX</p>
-                  <p className="type-caption text-xs text-slate-400">Drop file here or click to select</p>
-                </div>
-                <input className="hidden" type="file" accept=".csv,.json,.xlsx" onChange={onFileUpload} />
-              </label>
-
-              {sourceFileName && (
-                <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3 text-xs text-slate-300">
-                  Uploaded: <span className="type-body font-medium text-slate-100">{sourceFileName}</span>
-                </div>
-              )}
+                <p className="text-sm font-medium text-[var(--text-primary)]">
+                  Drop CSV / JSON / DSL file here
+                </p>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                  or click to import from file
+                </p>
+                <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                  Imported data will open in the Editor tab for editing.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => rawImportInputRef.current?.click()}
+                  className="mt-3 rounded-md border border-[var(--border-base)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)]"
+                >
+                  Import File
+                </button>
+                <input
+                  ref={rawImportInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".csv,.json,.txt,.dsl"
+                  onChange={onRawFileUpload}
+                />
+              </div>
 
               <IssueCenter issues={sourceIssues} />
 
-              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-[var(--bg-elevated)]"}`}>
-                <div className="mb-2 text-xs font-medium text-slate-500">Paste CSV text</div>
-                <textarea
-                  value={pastedCsv}
-                  onChange={(event) => setPastedCsv(event.target.value)}
-                  placeholder="source,target,value&#10;A,B,120&#10;B,C,40"
-                  className={`h-28 w-full rounded border px-2 py-1 text-xs font-mono outline-none ${
-                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-[var(--bg-elevated)]"
-                  }`}
-                />
-                <button
-                  onClick={previewPastedCsv}
-                  className="mt-2 w-full rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white"
-                >
-                  Preview Pasted CSV
-                </button>
-              </div>
-
-              <div className={`rounded-lg border p-3 ${isDarkTheme ? "border-slate-700 bg-slate-800" : "bg-[var(--bg-elevated)]"}`}>
-                <div className="mb-2 text-xs font-medium text-slate-500">Paste JSON text</div>
-                <textarea
-                  value={pastedJson}
-                  onChange={(event) => setPastedJson(event.target.value)}
-                  placeholder='[{"source":"A","target":"B","value":120}]'
-                  className={`h-28 w-full rounded border px-2 py-1 text-xs font-mono outline-none ${
-                    isDarkTheme ? "border-slate-600 bg-slate-900 text-slate-100" : "border-slate-200 bg-[var(--bg-elevated)]"
-                  }`}
-                />
-                {pastedJsonResult ? (
-                  pastedJsonResult.ok ? (
-                    <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-700">
-                      Valid JSON: {pastedJsonResult.graph.nodes.length} nodes, {pastedJsonResult.graph.links.length} links
-                    </div>
-                  ) : (
-                    <div className="mt-2 rounded border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--error)_14%,transparent)] px-2 py-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
-                      {pastedJsonResult.issue.message} (Ln {pastedJsonResult.issue.line}, Col {pastedJsonResult.issue.column})
-                    </div>
-                  )
-                ) : (
-                  <div className="mt-2 text-[11px] text-slate-500">Paste JSON to validate and preview.</div>
-                )}
-                <button
-                  onClick={previewPastedJson}
-                  className="mt-2 w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-200"
-                >
-                  Preview Pasted JSON
-                </button>
-                <button
-                  onClick={applyPastedJsonToEditor}
-                  className="mt-2 w-full rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white"
-                >
-                  Apply Pasted JSON
-                </button>
-                {pastedJsonResult?.ok && (
-                  <div className={rightPanelCardClass}>
-                    <div className="mb-1 text-[11px] font-medium text-slate-600">JSON Links Preview (top 5)</div>
-                    <table className="min-w-full text-left text-[11px]">
-                      <thead>
-                        <tr className="border-b text-slate-500">
-                          <th className="px-1 py-1 font-medium">source</th>
-                          <th className="px-1 py-1 font-medium">target</th>
-                          <th className="px-1 py-1 font-medium">value</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pastedJsonResult.graph.links.slice(0, 5).map((link, index) => (
-                          <tr key={`json-link-${index}`} className="border-b last:border-0">
-                            <td className="px-1 py-1 text-slate-700">{link.source}</td>
-                            <td className="px-1 py-1 text-slate-700">{link.target}</td>
-                            <td className="px-1 py-1 text-slate-700">{link.value}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              {sourcePreview && (
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
-                    <p className="text-xs font-medium text-slate-600">Import Value Policy</p>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          setValuePolicy("drop");
-                          setSourceError("");
-                          setSourceNotice("");
-                        }}
-                        className={`rounded border px-2 py-1 text-xs ${
-                          valuePolicy === "drop"
-                            ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
-                            : "border-slate-600 bg-slate-900 text-slate-300"
-                        }`}
-                      >
-                        Drop invalid/non-positive
-                      </button>
-                      <button
-                        onClick={() => {
-                          setValuePolicy("clamp");
-                          setSourceError("");
-                          setSourceNotice("");
-                        }}
-                        className={`rounded border px-2 py-1 text-xs ${
-                          valuePolicy === "clamp"
-                            ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
-                            : "border-slate-600 bg-slate-900 text-slate-300"
-                        }`}
-                      >
-                        Clamp to minimum
-                      </button>
-                    </div>
-                    {valuePolicy === "clamp" && (
-                      <label className="mt-2 block text-xs text-slate-600">
-                        Minimum Value
-                        <input
-                          type="number"
-                          min={0.0001}
-                          step={0.1}
-                          value={valueMinWhenClamped}
-                          onChange={(event) => {
-                            setValueMinWhenClamped(
-                              Math.max(0.0001, Number(event.target.value) || 1),
-                            );
-                            setSourceError("");
-                            setSourceNotice("");
-                          }}
-                          className="mt-1 w-full rounded border px-2 py-1 text-xs"
-                        />
-                      </label>
-                    )}
-                  </div>
-
-                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-slate-600">Mapping Presets</p>
-                      <button
-                        onClick={() => void saveMappingPreset()}
-                        disabled={sourceMappingIssues.length > 0}
-                        title={sourceMappingIssues.length > 0 ? sourceMappingIssues[0] : "Save current mapping preset"}
-                        className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        Save Current Mapping
-                      </button>
-                    </div>
-                    {mappingPresetsForMode.length === 0 ? (
-                      <p className="mt-2 text-[11px] text-slate-500">
-                        No presets for {sourcePreviewMode.toUpperCase()} yet.
-                      </p>
-                    ) : (
-                      <div className="mt-2 space-y-1">
-                        {mappingPresetsForMode.slice(0, 6).map((preset) => (
-                          <div key={preset.id} className="flex items-center gap-1">
-                            <button
-                              onClick={() => applyMappingPreset(preset.id)}
-                              disabled={!presetCompatibilityById.get(preset.id)?.ok}
-                              title={presetCompatibilityById.get(preset.id)?.reason || "Apply preset mapping"}
-                              className="flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-left text-[11px] text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {preset.name}
-                            </button>
-                            <button
-                              onClick={() => removeMappingPreset(preset.id)}
-                              className="rounded border border-[color:color-mix(in_srgb,var(--error)_50%,transparent)] px-2 py-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]"
-                              title="Delete preset mapping"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 rounded-lg border border-slate-700 bg-slate-900/70 p-3">
-                    <label className="text-xs text-slate-600">
-                      Source
-                      <select
-                        className="mt-1 w-full rounded border px-2 py-1 text-xs"
-                        value={sourcePreview.mapping.source}
-                        onChange={(event) => updateSourceMapping("source", event.target.value)}
-                      >
-                        {sourcePreview.headers.map((header) => (
-                          <option key={`source-${header}`} value={header}>
-                            {header}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs text-slate-600">
-                      Target
-                      <select
-                        className="mt-1 w-full rounded border px-2 py-1 text-xs"
-                        value={sourcePreview.mapping.target}
-                        onChange={(event) => updateSourceMapping("target", event.target.value)}
-                      >
-                        {sourcePreview.headers.map((header) => (
-                          <option key={`target-${header}`} value={header}>
-                            {header}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs text-slate-600">
-                      Value
-                      <select
-                        className="mt-1 w-full rounded border px-2 py-1 text-xs"
-                        value={sourcePreview.mapping.value}
-                        onChange={(event) => updateSourceMapping("value", event.target.value)}
-                      >
-                        {sourcePreview.headers.map((header) => (
-                          <option key={`value-${header}`} value={header}>
-                            {header}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
-                    <div className="mb-2 text-xs font-medium text-slate-600">Mapping Health</div>
-                    {sourceMappingIssues.length > 0 ? (
-                      <div className="space-y-1 text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
-                        {sourceMappingIssues.map((issue) => (
-                          <p key={issue}>- {issue}</p>
-                        ))}
-                      </div>
-                    ) : mappingTransformPreview ? (
-                      <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-600">
-                        <div className="rounded border bg-slate-50 px-2 py-1">
-                          Output: {mappingTransformPreview.stats.outputRows}
-                        </div>
-                        <div className="rounded border bg-slate-50 px-2 py-1">
-                          Dropped: {mappingTransformPreview.stats.droppedRows}
-                        </div>
-                        <div className="rounded border bg-slate-50 px-2 py-1">
-                          Clamped: {mappingTransformPreview.stats.clampedRows}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-500">Mapping preview unavailable.</p>
-                    )}
-                  </div>
-
-                  <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
-                    <div className="mb-2 text-xs font-medium text-slate-600">
-                      Preview ({sourcePreview.rows.length} rows)
-                    </div>
-                    <input
-                      value={sourceFilter}
-                      onChange={(event) => {
-                        setSourceFilter(event.target.value);
-                        setSourcePage(1);
-                      }}
-                      placeholder="Filter rows..."
-                      className="mb-2 w-full rounded border px-2 py-1 text-xs"
-                    />
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] text-slate-500">
-                        Page {Math.min(sourcePage, totalSourcePages)} / {totalSourcePages} ({filteredSortedRows.length} filtered)
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <select
-                          value={sourcePageSize}
-                          onChange={(event) => {
-                            setSourcePageSize(Number(event.target.value));
-                            setSourcePage(1);
-                          }}
-                          className="rounded border px-1 py-0.5 text-[11px]"
-                        >
-                          <option value={5}>5 / page</option>
-                          <option value={10}>10 / page</option>
-                          <option value={20}>20 / page</option>
-                        </select>
-                        <button
-                          onClick={() => setSourcePage((p) => Math.max(1, p - 1))}
-                          className="rounded border px-2 py-0.5 text-[11px]"
-                          disabled={sourcePage <= 1}
-                          title={sourcePage <= 1 ? "Already at first page." : "Previous page"}
-                        >
-                          Prev
-                        </button>
-                        <button
-                          onClick={() => setSourcePage((p) => Math.min(totalSourcePages, p + 1))}
-                          className="rounded border px-2 py-0.5 text-[11px]"
-                          disabled={sourcePage >= totalSourcePages}
-                          title={sourcePage >= totalSourcePages ? "Already at last page." : "Next page"}
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </div>
-                    <div className="overflow-auto">
-                      <table className="min-w-full text-left text-xs">
-                        <thead>
-                          <tr className="border-b text-slate-500">
-                            {sourcePreview.headers.map((header) => (
-                              <th key={`head-${header}`} className="px-2 py-1 font-medium">
-                                <button
-                                  onClick={() => toggleSortBy(header)}
-                                  className="inline-flex items-center gap-1 hover:text-slate-800"
-                                >
-                                  {header}
-                                  {sourceSortKey === header ? (sourceSortDir === "asc" ? "^" : "v") : ""}
-                                </button>
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {paginatedRows.map((row, index) => (
-                            <tr key={`row-${sourcePage}-${index}`} className="border-b last:border-0">
-                              {sourcePreview.headers.map((header) => (
-                                <td key={`cell-${sourcePage}-${index}-${header}`} className="px-2 py-1 text-slate-700">
-                                  {row[header]}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={applyMappingToEditor}
-                    disabled={!canApplyMapping}
-                    className={sourcePrimaryActionClass}
-                    title={!canApplyMapping ? (sourceMappingIssues[0] || "No valid rows with current mapping/policy.") : "Apply mapped data to editor"}
-                  >
-                    Apply Mapping to Editor ({sourcePreviewMode.toUpperCase()})
-                  </button>
-                  {!canApplyMapping && (
-                    <p className="text-[11px] text-[color:color-mix(in_srgb,var(--error)_78%,white)]">
-                      {sourceMappingIssues[0] || "No valid rows to import with current mapping/policy."}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
           ) : (
             <div className="min-h-0 flex-1 border-t">
@@ -3216,11 +2701,63 @@ export function EditorWorkspace({ templateId, docId }: Props) {
               onNodePositionChange={setNodePosition}
               onSelectionChange={setSelectedNodeIds}
               onLinkSelectionChange={setSelectedLinkIndex}
+              onLinkEditRequest={openLinkEditor}
+              onNodeEditRequest={openNodeEditor}
+              pulseLinkIndex={pulseLinkIndex}
+              pulseNodeId={pulseNodeId}
               onZoomChange={setZoomLevel}
               onSvgReady={setSvgElement}
             />
           </motion.div>
         </main>
+
+      {activeEditorModal && activeEditorModal.type === "link" && linkEditDraft && (
+        <FlowEditModal
+          mode="link"
+          draft={linkEditDraft}
+          anchor={editorModalAnchor}
+          related={{
+            sameSourceCount: graph.links.filter(
+              (link, index) =>
+                index !== activeEditorModal.index && link.source === linkEditDraft.source,
+            ).length,
+            sameTargetCount: graph.links.filter(
+              (link, index) =>
+                index !== activeEditorModal.index && link.target === linkEditDraft.target,
+            ).length,
+          }}
+          onJumpSameSource={() => jumpToRelatedLink("source")}
+          onJumpSameTarget={() => jumpToRelatedLink("target")}
+          nodeOptions={nodeIdOptions}
+          error={editorModalError ?? linkDraftValidationError}
+          canSave={!linkDraftValidationError}
+          onDraftChange={(draft) => {
+            setEditorModalError(null);
+            setLinkEditDraft(draft);
+          }}
+          onSave={saveLinkEdit}
+          onDelete={deleteLinkEdit}
+          onClose={closeEditorModal}
+        />
+      )}
+
+      {activeEditorModal && activeEditorModal.type === "node" && nodeEditDraft && (
+        <FlowEditModal
+          mode="node"
+          draft={nodeEditDraft}
+          anchor={editorModalAnchor}
+          nodeOptions={nodeIdOptions}
+          stats={nodeStatsById.get(nodeEditDraft.id)}
+          error={editorModalError ?? nodeDraftValidationError}
+          canSave={!nodeDraftValidationError}
+          onDraftChange={(draft) => {
+            setEditorModalError(null);
+            setNodeEditDraft(draft);
+          }}
+          onSave={saveNodeEdit}
+          onClose={closeEditorModal}
+        />
+      )}
 
         
       {dialogNode}

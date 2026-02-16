@@ -1,5 +1,5 @@
-import { DocumentHub } from "@/components/home/document-hub";
+import { Dashboard } from "@/components/dashboard/dashboard";
 
 export default function Home() {
-  return <DocumentHub />;
+  return <Dashboard />;
 }

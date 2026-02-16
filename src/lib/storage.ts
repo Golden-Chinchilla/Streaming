@@ -10,6 +10,7 @@ const CURRENT_DOC_ID_KEY = "current-document-id";
 const DOCUMENTS_KEY = "documents";
 const FOLDERS_KEY = "folders";
 const APP_PREFERENCES_KEY = "app-preferences";
+const OPEN_DOCUMENT_IDS_KEY = "open-document-ids";
 
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultTheme: "light",
@@ -133,16 +134,22 @@ export async function upsertDocument(document: BaseDocument): Promise<void> {
 }
 
 export async function deleteDocumentById(docId: string): Promise<void> {
+  await deleteDocumentsByIds([docId]);
+}
+
+export async function deleteDocumentsByIds(docIds: string[]): Promise<void> {
   const db = await getDb();
   const docs = await loadAllDocuments();
-  const next = docs.filter((d) => d.id !== docId);
+  const toDelete = new Set(docIds);
+  const next = docs.filter((d) => !toDelete.has(d.id));
   await db.put(STORE_NAME, next, DOCUMENTS_KEY);
 
-  // If this was the current document, switch to the next available
+  // If the current document was deleted, switch to the next available
   const currentId = (await db.get(STORE_NAME, CURRENT_DOC_ID_KEY)) as
     | string
     | undefined;
-  if (currentId === docId) {
+
+  if (currentId && toDelete.has(currentId)) {
     await db.put(STORE_NAME, next[0]?.id ?? null, CURRENT_DOC_ID_KEY);
   }
 }
@@ -277,4 +284,19 @@ export async function saveAppPreferences(
 ): Promise<void> {
   const db = await getDb();
   await db.put(STORE_NAME, preferences, APP_PREFERENCES_KEY);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Open Documents Persistence                                        */
+/* ------------------------------------------------------------------ */
+
+export async function loadOpenDocumentIds(): Promise<string[]> {
+  const db = await getDb();
+  const ids = (await db.get(STORE_NAME, OPEN_DOCUMENT_IDS_KEY)) as string[] | undefined;
+  return ids ?? [];
+}
+
+export async function saveOpenDocumentIds(ids: string[]): Promise<void> {
+  const db = await getDb();
+  await db.put(STORE_NAME, ids, OPEN_DOCUMENT_IDS_KEY);
 }

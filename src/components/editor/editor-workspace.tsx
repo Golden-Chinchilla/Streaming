@@ -1,5 +1,6 @@
 "use client";
 
+import "@/plugins/register-all";
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
@@ -10,16 +11,14 @@ import {
   Download,
   LayoutTemplate,
   GripVertical,
-  Moon,
   Play,
   Redo2,
-  Trash2,
   Undo2,
-  Sun,
   FileUp,
   FileDown,
+  Sun,
+  Moon,
 } from "lucide-react";
-import { sankey, SankeyGraph as D3SankeyGraph } from "d3-sankey";
 import { parseSankeyTextDetailed } from "@/plugins/sankey/sankey-parse";
 import {
   deleteDocumentById,
@@ -30,6 +29,8 @@ import {
   saveAppPreferences,
   setCurrentDocumentId,
   upsertDocument,
+  loadOpenDocumentIds,
+  saveOpenDocumentIds,
 } from "@/lib/storage";
 import {
   AppPreferences,
@@ -58,6 +59,7 @@ import { useAppDialog } from "@/components/common/app-dialog";
 import { useEditorStore } from "@/store/editor-store";
 import { EditableLink } from "@/plugins/sankey/sankey-types";
 import { serializeLinksByFormat } from "@/plugins/sankey/sankey-serialize";
+import { EditorTabs } from "@/components/editor/editor-tabs";
 
 function downloadFile(name: string, mime: string, content: string) {
   const blob = new Blob([content], { type: mime });
@@ -122,90 +124,13 @@ const LEFT_WORKBENCH_MODE_STORAGE_KEY = "streaming-editor-left-workbench-mode-v1
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
 
-type AutoLayoutStrategy = "reset" | "compact" | "spacious" | "centered";
-type LayoutNodeDatum = { id: string };
-type LayoutLinkDatum = { source: string; target: string; value: number };
-type LayoutGraph = D3SankeyGraph<LayoutNodeDatum, LayoutLinkDatum>;
-
-const AUTO_LAYOUT_STRATEGY_OPTIONS: Array<{ id: AutoLayoutStrategy; label: string }> = [
-  { id: "reset", label: "Default" },
-  { id: "compact", label: "Compact" },
-  { id: "spacious", label: "Spacious" },
-  { id: "centered", label: "Centered" },
-];
-const LAYOUT_TOP = 30;
-const LAYOUT_BOTTOM = 670;
-
-function clampLayoutTop(top: number, nodeHeight: number) {
-  return Math.max(LAYOUT_TOP, Math.min(LAYOUT_BOTTOM - nodeHeight, top));
-}
-
-function buildLayoutByStrategy(
-  graph: { nodes: { id: string }[]; links: { source: string; target: string; value: number }[] },
-  style: { nodeWidth: number; nodePadding: number },
-  strategy: Exclude<AutoLayoutStrategy, "reset">,
-) {
-  const paddingByStrategy =
-    strategy === "compact"
-      ? Math.max(6, Math.round(style.nodePadding * 0.65))
-      : strategy === "spacious"
-        ? Math.min(48, Math.round(style.nodePadding * 1.45))
-        : Math.min(52, Math.round(style.nodePadding * 1.2));
-
-  const generator = sankey<LayoutNodeDatum, LayoutLinkDatum>()
-    .nodeId((node) => node.id)
-    .nodeWidth(style.nodeWidth)
-    .nodePadding(paddingByStrategy)
-    .extent([
-      [44, LAYOUT_TOP],
-      [1156, LAYOUT_BOTTOM],
-    ]);
-
-  const built: LayoutGraph = generator({
-    nodes: graph.nodes.map((node) => ({ ...node })),
-    links: graph.links.map((link) => ({ ...link })),
-  });
-
-  const nextPositions: Record<string, number> = {};
-  if (strategy !== "centered") {
-    for (const node of built.nodes) {
-      nextPositions[node.id] = node.y0 ?? LAYOUT_TOP;
-    }
-    return nextPositions;
-  }
-
-  const columns = new Map<number, typeof built.nodes>();
-  for (const node of built.nodes) {
-    const columnKey = Math.round(node.x0 ?? 0);
-    const inColumn = columns.get(columnKey) ?? [];
-    inColumn.push(node);
-    columns.set(columnKey, inColumn);
-  }
-
-  for (const [, columnNodes] of columns) {
-    const minY = Math.min(...columnNodes.map((node) => node.y0 ?? LAYOUT_TOP));
-    const maxY = Math.max(...columnNodes.map((node) => node.y1 ?? LAYOUT_TOP));
-    const columnHeight = maxY - minY;
-    const targetTop = LAYOUT_TOP + ((LAYOUT_BOTTOM - LAYOUT_TOP) - columnHeight) / 2;
-    const offset = targetTop - minY;
-
-    for (const node of columnNodes) {
-      const currentTop = node.y0 ?? LAYOUT_TOP;
-      const currentBottom = node.y1 ?? currentTop;
-      const height = currentBottom - currentTop;
-      nextPositions[node.id] = clampLayoutTop(currentTop + offset, height);
-    }
-  }
-
-  return nextPositions;
-}
-
 type LeftWorkbenchMode = "collapsed" | "compact" | "expanded";
 type ActiveWorkspaceOverlay = "none" | "left";
 type ActiveEditorModal =
   | { type: "link"; index: number }
   | { type: "node"; id: string }
   | null;
+
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultTheme: "light",
   defaultPerformanceMode: "auto",
@@ -278,21 +203,15 @@ function viewportRange(width: number): "wide" | "medium" | "narrow" {
 
 export function EditorWorkspace({ docId }: Props) {
   const router = useRouter();
-  const { confirm, dialogNode } = useAppDialog();
+  const { dialogNode } = useAppDialog();
   const [initialExportSettings] = useState(loadExportSettingsFromStorage);
   const [isAppPreferencesReady, setIsAppPreferencesReady] = useState(false);
   const [appPreferences, setAppPreferences] = useState<AppPreferences>(
     DEFAULT_APP_PREFERENCES,
   );
-  const [showDocuments, setShowDocuments] = useState(false);
-  const [librarySearch, setLibrarySearch] = useState("");
   const [allDocuments, setAllDocuments] = useState<BaseDocument[]>([]);
 
-  const filteredDocuments = useMemo(() => {
-    if (!librarySearch.trim()) return allDocuments;
-    const lower = librarySearch.toLowerCase();
-    return allDocuments.filter(d => (d.title || "Untitled").toLowerCase().includes(lower));
-  }, [allDocuments, librarySearch]);
+
 
   const [isDragOver, setIsDragOver] = useState(false);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
@@ -316,7 +235,6 @@ export function EditorWorkspace({ docId }: Props) {
   const [leftWorkbenchMode, setLeftWorkbenchMode] = useState<LeftWorkbenchMode>(loadLeftWorkbenchModeFromStorage);
   const leftWorkbenchVisible = leftWorkbenchMode !== "collapsed";
   const [activeWorkspaceOverlay, setActiveWorkspaceOverlay] = useState<ActiveWorkspaceOverlay>("none");
-  const [autoLayoutStrategy, setAutoLayoutStrategy] = useState<AutoLayoutStrategy>("reset");
   const [canvasActionIssue, setCanvasActionIssue] = useState<AppIssue | null>(null);
   const [exportIssues, setExportIssues] = useState<AppIssue[]>([]);
   const [activeEditorModal, setActiveEditorModal] = useState<ActiveEditorModal>(null);
@@ -324,29 +242,24 @@ export function EditorWorkspace({ docId }: Props) {
   const [nodeEditDraft, setNodeEditDraft] = useState<NodeEditDraft | null>(null);
   const [editorModalError, setEditorModalError] = useState<string | null>(null);
 
+  const [openDocIds, setOpenDocIds] = useState<string[]>([]);
+  const openDocuments = useMemo(() => {
+    const docMap = new Map(allDocuments.map(d => [d.id, d]));
+    return openDocIds.map(id => docMap.get(id)).filter((d): d is BaseDocument => d != null);
+  }, [allDocuments, openDocIds]);
+
+
 
 
   // If we have a plugin, use its editor mode. Otherwise default to 'code' (legacy safe).
 
   // For now we assume Sankey is always code mode, as per existing logic.
 
-  // --- Theme Sync & Auto-save ---
-  const [editorModalAnchor, setEditorModalAnchor] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const [pulseLinkIndex, setPulseLinkIndex] = useState<number | null>(null);
-  const [pulseNodeId, setPulseNodeId] = useState<string | null>(null);
-  const [showFileMenu, setShowFileMenu] = useState(false);
-  const [showAutoLayoutMenu, setShowAutoLayoutMenu] = useState(false);
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const [showDisplayMenu, setShowDisplayMenu] = useState(false);
-  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "style">("view");
-  const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
+
 
 
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const displayMenuRef = useRef<HTMLDivElement | null>(null);
-  const autoLayoutMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const workspaceQuickMenuRef = useRef<HTMLDivElement | null>(null);
   const rawImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -373,7 +286,6 @@ export function EditorWorkspace({ docId }: Props) {
     setEditorText,
     setAutoSync,
     syncFromEditor,
-    patchStyle,
     setNodePositions,
     clearNodePositions,
     setSelectedNodeIds,
@@ -386,30 +298,56 @@ export function EditorWorkspace({ docId }: Props) {
     redo,
   } = useEditorStore();
 
-  const sankeyData = currentDoc.data as unknown as SankeyData;
+  const [editorModalAnchor, setEditorModalAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [pulseLinkIndex, setPulseLinkIndex] = useState<number | null>(null);
+  const [pulseNodeId, setPulseNodeId] = useState<string | null>(null);
+  const [showFileMenu, setShowFileMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showDisplayMenu, setShowDisplayMenu] = useState(false);
+  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "style">("view");
+  const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
+
+
+
+  // Generic data accessors that work for both Sankey and Swimlane
+  const docData = currentDoc.data as Record<string, unknown>;
+  const docEditorText = (docData.editorText ?? "") as string;
+  const docFormat = (docData.format ?? "json") as DataFormat;
+  const docStyleTheme = ((docData.style as Record<string, unknown>)?.theme ?? "dark") as "light" | "dark";
+  // Legacy alias for Sankey-specific code paths
 
   const alignDocThemeWithPreference = useCallback((doc: BaseDocument): BaseDocument => {
     const preferredTheme = appPreferences.defaultTheme;
-    // We only know how to update usage for Sankey diagrams right now
-    if (doc.diagramType !== 'sankey') return doc;
+    const data = doc.data as Record<string, unknown>;
+    const style = data.style as Record<string, unknown> | undefined;
+    if (!style || style.theme === preferredTheme) return doc;
 
-    const data = doc.data as unknown as SankeyData;
-    if (data.style.theme === preferredTheme) return doc;
+    // For Sankey, also update labelColor to match new theme
+    if (doc.diagramType === 'sankey') {
+      const sankeyStyle = style as unknown as SankeyData['style'];
+      const prevDefaultLabelColor = sankeyStyle.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+      const nextDefaultLabelColor = preferredTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
+      return {
+        ...doc,
+        data: {
+          ...data,
+          style: {
+            ...style,
+            theme: preferredTheme,
+            labelColor: sankeyStyle.labelColor === prevDefaultLabelColor
+              ? nextDefaultLabelColor
+              : sankeyStyle.labelColor,
+          },
+        } as unknown as Record<string, unknown>,
+      };
+    }
 
-    const prevDefaultLabelColor = data.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-    const nextDefaultLabelColor = preferredTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-
+    // Generic (Swimlane, etc.): just update theme
     return {
       ...doc,
       data: {
         ...data,
-        style: {
-          ...data.style,
-          theme: preferredTheme,
-          labelColor: data.style.labelColor === prevDefaultLabelColor
-            ? nextDefaultLabelColor
-            : data.style.labelColor,
-        },
+        style: { ...style, theme: preferredTheme },
       } as unknown as Record<string, unknown>,
     };
   }, [appPreferences.defaultTheme]);
@@ -522,8 +460,109 @@ export function EditorWorkspace({ docId }: Props) {
 
   useEffect(() => {
     if (typeof document === "undefined") return;
-    document.documentElement.setAttribute("data-theme", sankeyData.style.theme);
-  }, [sankeyData.style.theme]);
+    document.documentElement.setAttribute("data-theme", docStyleTheme);
+  }, [docStyleTheme]);
+
+  // Load open documents on mount
+  useEffect(() => {
+    loadOpenDocumentIds().then((ids) => {
+      setOpenDocIds(ids);
+      // Ensure current doc is in open list
+      if (docId && !ids.includes(docId)) {
+        setOpenDocIds(prev => [...prev, docId]);
+      }
+    });
+  }, [docId]);
+
+  // Persist open documents
+  useEffect(() => {
+    if (openDocIds.length > 0) {
+      saveOpenDocumentIds(openDocIds);
+    }
+  }, [openDocIds]);
+
+  const handleOpenDocument = (id: string) => {
+    if (!openDocIds.includes(id)) {
+      setOpenDocIds(prev => [...prev, id]);
+    }
+    router.push(`/editor?id=${id}`);
+  };
+
+  const handleCloseDocument = (idToClose: string) => {
+    const nextIds = openDocIds.filter(id => id !== idToClose);
+    setOpenDocIds(nextIds);
+    saveOpenDocumentIds(nextIds); // Force save immediately
+
+    // If closing current document, navigate to another one
+    if (idToClose === docId) {
+      if (nextIds.length > 0) {
+        // Go to the last opened one (or next one)
+        router.push(`/editor?id=${nextIds[nextIds.length - 1]}`);
+      } else {
+        router.push("/");
+      }
+    }
+  };
+
+  const handleDeleteFromTab = async (idToDelete: string) => {
+    if (window.confirm("Are you sure you want to delete this document?")) {
+      await deleteDocumentById(idToDelete);
+      handleCloseDocument(idToDelete);
+      // Refresh list
+      loadAllDocuments().then(setAllDocuments);
+    }
+  };
+
+  const handleCreateNewDiagram = async () => {
+    const { defaultSankeyData } = await import("@/plugins/sankey");
+    const newDoc: BaseDocument = {
+      id: crypto.randomUUID(),
+      title: "Untitled Diagram",
+      diagramType: "sankey",
+      folderId: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      data: {
+        ...defaultSankeyData,
+        style: { ...defaultSankeyData.style, theme: appPreferences.defaultTheme }
+      } as Record<string, unknown>
+    };
+
+    await upsertDocument(newDoc);
+    setAllDocuments(prev => [newDoc, ...prev]);
+    setOpenDocIds(prev => [...prev, newDoc.id]);
+    router.push(`/editor?id=${newDoc.id}`);
+  };
+
+  // ─── Theme Toggle (syncs with Dashboard) ──────────────────────────
+  const handleToggleTheme = useCallback(async () => {
+    const nextTheme = docStyleTheme === "dark" ? "light" : "dark";
+    // 1. Update the HTML attribute immediately
+    document.documentElement.setAttribute("data-theme", nextTheme);
+    // 2. Update current doc's style theme
+    const updatedData = { ...docData } as Record<string, unknown>;
+    const style = (updatedData.style ?? {}) as Record<string, unknown>;
+    updatedData.style = {
+      ...style,
+      theme: nextTheme,
+      labelColor: nextTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR,
+    };
+    initialize({
+      ...currentDoc,
+      data: updatedData,
+      updatedAt: Date.now(),
+    });
+    void upsertDocument({
+      ...currentDoc,
+      data: updatedData,
+      updatedAt: Date.now(),
+    });
+    // 3. Persist the preference so the dashboard picks it up
+    const prefs = await loadAppPreferences();
+    const updatedPrefs = { ...prefs, defaultTheme: nextTheme as "light" | "dark" };
+    setAppPreferences(updatedPrefs);
+    await saveAppPreferences(updatedPrefs);
+  }, [docStyleTheme, docData, currentDoc, initialize]);
 
 
 
@@ -535,9 +574,6 @@ export function EditorWorkspace({ docId }: Props) {
       }
       if (displayMenuRef.current && !displayMenuRef.current.contains(target)) {
         setShowDisplayMenu(false);
-      }
-      if (autoLayoutMenuRef.current && !autoLayoutMenuRef.current.contains(target)) {
-        setShowAutoLayoutMenu(false);
       }
       if (exportMenuRef.current && !exportMenuRef.current.contains(target)) {
         setShowExportMenu(false);
@@ -598,11 +634,11 @@ export function EditorWorkspace({ docId }: Props) {
       const lower = event.key.toLowerCase();
       if (
         event.key === "Escape" &&
-        (showFileMenu || showDisplayMenu || showAutoLayoutMenu || showExportMenu)
+        event.key === "Escape" &&
+        (showFileMenu || showDisplayMenu || showExportMenu)
       ) {
         setShowFileMenu(false);
         setShowDisplayMenu(false);
-        setShowAutoLayoutMenu(false);
         setShowExportMenu(false);
         event.preventDefault();
         return;
@@ -659,23 +695,12 @@ export function EditorWorkspace({ docId }: Props) {
         }
         if (event.shiftKey && lower === "l") {
           event.preventDefault();
-          if (autoLayoutStrategy === "reset") {
-            clearNodePositions();
-            setCanvasActionIssue({
-              id: `shortcut-layout-reset-${Date.now()}`,
-              level: "success",
-              title: "Applied auto-layout: Default",
-              description: "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L",
-            });
-            return;
-          }
-          const nextPositions = buildLayoutByStrategy(graph, sankeyData.style, autoLayoutStrategy);
-          setNodePositions(nextPositions);
+          clearNodePositions();
           setCanvasActionIssue({
-            id: `shortcut-layout-${Date.now()}`,
+            id: `shortcut-layout-reset-${Date.now()}`,
             level: "success",
-            title: `Applied auto-layout: ${AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === autoLayoutStrategy)?.label ?? autoLayoutStrategy}`,
-            description: "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L",
+            title: "Layout reset to default",
+            description: "Default d3-sankey layout applied",
           });
           return;
         }
@@ -725,12 +750,6 @@ export function EditorWorkspace({ docId }: Props) {
       window.removeEventListener("blur", onBlur);
     };
   }, [
-    autoLayoutStrategy,
-    clearNodePositions,
-    clearSelectedLinkStyle,
-    clearSelectedNodeStyles,
-    clearSelection,
-    sankeyData.style,
     graph,
     redo,
     selectedLinkIndex,
@@ -738,7 +757,6 @@ export function EditorWorkspace({ docId }: Props) {
     setNodePositions,
     setSelectedLinkIndex,
     setSelectedNodeIds,
-    showAutoLayoutMenu,
     showExportMenu,
     showFileMenu,
     showDisplayMenu,
@@ -866,7 +884,7 @@ export function EditorWorkspace({ docId }: Props) {
       .trim();
     return base.length > 0 ? base : safeTitle;
   }, [currentDoc.title, exportFileTemplate]);
-  const exportSolidBackground = sankeyData.style.theme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
+  const exportSolidBackground = docStyleTheme === "dark" ? EXPORT_BG_DARK : EXPORT_BG_LIGHT;
   const effectiveExportBackground = useMemo(() => {
     if (!svgElement) return exportSolidBackground;
     const container = svgElement.parentElement?.parentElement;
@@ -1149,7 +1167,7 @@ export function EditorWorkspace({ docId }: Props) {
     successTitle: string,
     successDescription?: string,
   ) => {
-    const nextText = serializeLinksByFormat(nextLinks, sankeyData.format);
+    const nextText = serializeLinksByFormat(nextLinks, docFormat);
     clearNodePositions();
     setEditorText(nextText);
     if (activeEditorModal?.type === "link") {
@@ -1247,25 +1265,7 @@ export function EditorWorkspace({ docId }: Props) {
     return () => window.clearTimeout(timer);
   }, [pulseLinkIndex, pulseNodeId]);
 
-  const applyAutoLayoutStrategy = (strategy: AutoLayoutStrategy, source: "toolbar" | "shortcut" = "toolbar") => {
-    if (strategy === "reset") {
-      clearNodePositions();
-      pushCanvasActionIssue(
-        "success",
-        "Applied auto-layout: Default",
-        source === "shortcut" ? "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L" : "Reset to default d3-sankey layout",
-      );
-      return;
-    }
-    const nextPositions = buildLayoutByStrategy(graph, sankeyData.style, strategy);
-    setNodePositions(nextPositions);
-    const label = AUTO_LAYOUT_STRATEGY_OPTIONS.find((item) => item.id === strategy)?.label ?? strategy;
-    pushCanvasActionIssue(
-      "success",
-      `Applied auto-layout: ${label}`,
-      source === "shortcut" ? "閿熸枻鎷疯弫? Ctrl/Cmd+Shift+L" : `${graph.nodes.length} nodes updated`,
-    );
-  };
+
 
   const clearSelectionWithNotice = () => {
     if (selectedNodeIds.length === 0 && selectedLinkIndex == null) return;
@@ -1381,31 +1381,13 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
-  const runExportAll = async () => {
-    const issues = validateExportRequest("all");
-    setExportIssues(issues);
-    if (issues.some((issue) => issue.level === "error")) return;
-    try {
-      await exportAll();
-      setExportIssues((prev) => [
-        ...prev,
-        {
-          id: `export-success-${crypto.randomUUID()}`,
-          level: "success",
-          title: "Export All completed",
-        },
-      ]);
-    } catch (error) {
-      setExportIssues((prev) => [
-        ...prev,
-        {
-          id: `export-failed-${crypto.randomUUID()}`,
-          level: "error",
-          title: "Export All failed",
-          description: error instanceof Error ? error.message : "Unexpected export error",
-        },
-      ]);
-    }
+
+
+  const handleExport = (type: "svg" | "png" | "html") => {
+    if (type === "svg") runExportSvg();
+    if (type === "png") void runExportPng();
+    if (type === "html") runExportHtml();
+    setShowExportMenu(false);
   };
 
   const exportSvg = (customBaseName?: string) => {
@@ -1469,6 +1451,56 @@ export function EditorWorkspace({ docId }: Props) {
 
       image.src = url;
     });
+  };
+
+  // ─── Export / Import Config JSON (FR-5.3) ──────────────────────────
+  const exportConfigJson = () => {
+    const configPayload = {
+      _format: "streaming-ide-config-v1",
+      title: currentDoc.title,
+      diagramType: currentDoc.diagramType,
+      data: currentDoc.data,
+      exportedAt: new Date().toISOString(),
+    };
+    const json = JSON.stringify(configPayload, null, 2);
+    const safeTitle = (currentDoc.title || "diagram").trim().replace(/[\\/:*?"<>|]/g, "-");
+    downloadFile(`${safeTitle}.streaming.json`, "application/json", json);
+    pushCanvasActionIssue("success", "Config exported", "Configuration saved as .streaming.json");
+  };
+
+  const importConfigJsonInputRef = useRef<HTMLInputElement | null>(null);
+
+  const importConfigJson = async (file: File) => {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+
+      if (parsed._format !== "streaming-ide-config-v1") {
+        pushCanvasActionIssue("error", "Import failed", "Invalid config file format. Expected .streaming.json exported by this app.");
+        return;
+      }
+
+      const newDoc: BaseDocument = {
+        id: crypto.randomUUID(),
+        title: parsed.title || "Imported Diagram",
+        diagramType: parsed.diagramType || "sankey",
+        folderId: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        data: parsed.data,
+      };
+
+      initialize(newDoc);
+      await upsertDocument(newDoc);
+      await setCurrentDocumentId(newDoc.id);
+      setOpenDocIds((prev) => [...prev, newDoc.id]);
+      setAllDocuments((prev) => [newDoc, ...prev]);
+      router.push(`/editor?id=${newDoc.id}`);
+
+      pushCanvasActionIssue("success", "Config imported", `Loaded "${newDoc.title}" (${newDoc.diagramType})`);
+    } catch (error) {
+      pushCanvasActionIssue("error", "Import failed", error instanceof Error ? error.message : "Failed to parse config JSON");
+    }
   };
 
   const exportAll = async () => {
@@ -1585,15 +1617,6 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
-  const openDocumentById = async (nextDocId: string) => {
-    const hit = await loadDocumentById(nextDocId);
-    if (!hit) return;
-    initialize(hit);
-    await setCurrentDocumentId(hit.id);
-    setShowDocuments(false);
-    router.replace(`/editor?doc=${encodeURIComponent(hit.id)}`);
-  };
-
   const createNewDocument = async () => {
     const { defaultSankeyData } = await import("@/plugins/sankey");
     const newDoc: BaseDocument = {
@@ -1611,7 +1634,6 @@ export function EditorWorkspace({ docId }: Props) {
     initialize(newDoc);
     await upsertDocument(newDoc);
     await setCurrentDocumentId(newDoc.id);
-    setShowDocuments(false);
     router.replace(`/editor?doc=${encodeURIComponent(newDoc.id)}`);
   };
 
@@ -1634,32 +1656,6 @@ export function EditorWorkspace({ docId }: Props) {
 
 
 
-  const deleteCurrentDocument = async () => {
-    if (allDocuments.length <= 1) {
-      await createNewDocument();
-      return;
-    }
-    const confirmed = await confirm({
-      title: "Delete current document?",
-      message: "This action cannot be undone.",
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    await deleteDocumentById(currentDoc.id);
-    const nextDocs = await loadAllDocuments();
-    const nextDoc = nextDocs[0];
-    if (!nextDoc) {
-      await createNewDocument();
-      return;
-    }
-    initialize(nextDoc);
-    await setCurrentDocumentId(nextDoc.id);
-    setShowDocuments(false);
-    router.replace(`/editor?doc=${encodeURIComponent(nextDoc.id)}`);
-  };
-
-
   const workspaceClass =
     "relative flex h-screen flex-col overflow-hidden bg-background text-foreground font-sans";
   const leftPanelClass =
@@ -1670,42 +1666,23 @@ export function EditorWorkspace({ docId }: Props) {
   // MD3 Menu text buttons — Google Docs style
   const controlButtonClass =
     "md3-state-layer inline-flex items-center gap-1 rounded px-2 py-1 text-sm font-medium text-foreground/80 transition-colors";
-  const controlButtonWideClass = controlButtonClass;
+
 
   const toolbarIconButtonClass =
     "md3-state-layer inline-flex h-8 w-8 items-center justify-center rounded-full text-foreground/60 hover:text-foreground transition-all";
 
-  const documentPopoverClass =
-    "absolute left-4 top-[calc(var(--header-row1-height)+var(--header-row2-height)+4px)] z-40 w-96 rounded-xl border border-border bg-surface-container-high p-3 shadow-(--shadow-base) ring-1 ring-black/5";
-
-  const rightPanelFieldCompactClass =
-    "mt-1 w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors";
-
-
-
   // MD3 Dropdown menus — rounded-lg, shadow-base, menu-open animation
   const headerMenuClass =
     "absolute left-0 top-full mt-1 z-140 min-w-[220px] origin-top-left rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
-  const headerMenuRightClass =
-    "absolute right-0 top-full mt-1 z-140 min-w-[220px] origin-top-right rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
+
   const headerMenuItemClass =
     "md3-state-layer flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-foreground/80 transition-colors";
-  const headerMenuItemActiveClass =
-    "md3-state-layer flex w-full items-center gap-2.5 rounded-lg bg-primary/8 px-3 py-2 text-left text-sm font-semibold text-primary";
 
   // Floating toggle button for sidebar
   const floatingIconButtonClass =
     "pointer-events-auto md3-state-layer inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-container-high text-foreground shadow-(--shadow-sm) transition-all hover:shadow-(--shadow-base) active:scale-95";
 
-  const themeToggleButtonClass =
-    "md3-state-layer inline-flex h-9 w-9 items-center justify-2 rounded-full text-foreground/60 transition-all";
 
-  // MD3 Tonal button for Export
-  const exportButtonClass =
-    "md3-state-layer inline-flex items-center gap-2 rounded-full bg-primary/10 px-5 py-2 text-sm font-medium text-primary transition-all hover:bg-primary/16 hover:shadow-(--shadow-sm) active:scale-[0.97]";
-
-
-  const libraryEmptyStateClass = "rounded-xl border border-dashed border-border bg-[color-mix(in_srgb,var(--surface-container)_60%,transparent)] px-4 py-8 text-center text-sm text-muted";
   const isNarrowViewport = viewportWidth < 1200;
   const leftWorkbenchWidth = 360;
 
@@ -1795,252 +1772,246 @@ export function EditorWorkspace({ docId }: Props) {
 
   return (
     <div className={workspaceClass}>
-      {/* ===== Two-Row Header (Google Docs style) ===== */}
-      <header className="relative z-90 flex flex-col bg-background border-b border-border">
-        {/* Row 1: Logo + Title + Actions */}
-        <div className="flex h-(--header-row1-height) items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/")}
-              className="md3-state-layer inline-flex h-10 w-10 items-center justify-center rounded-full text-primary transition-colors"
-              title="Back to Home"
-              aria-label="Back to Home"
-            >
-              <LayoutTemplate className="h-6 w-6" />
-            </button>
+      <EditorTabs
+        documents={openDocuments}
+        activeDocId={docId || null}
+        onSelect={handleOpenDocument}
+        onClose={handleCloseDocument}
+        onNew={handleCreateNewDiagram}
+        onDelete={handleDeleteFromTab}
+      />
 
-            <input
-              value={currentDoc.title}
-              onChange={(event) => setTitle(event.target.value)}
-              className="w-72 rounded-lg px-2.5 py-1.5 text-lg font-normal text-foreground placeholder:text-muted outline-none border border-transparent hover:border-border focus:border-primary focus:ring-2 focus:ring-primary/20 focus:bg-background transition-all"
-              placeholder="Untitled Document"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative" ref={exportMenuRef}>
+      <header className="h-[52px] border-b border-border bg-surface px-4 flex items-center justify-between gap-4">
+        {/* Left: Title & Menus */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <button onClick={() => router.push("/")} className="p-1.5 rounded-lg hover:bg-surface-container-high transition-colors text-muted hover:text-foreground">
+            <LayoutTemplate className="w-5 h-5" />
+          </button>
+
+          <input
+            value={currentDoc.title || ""}
+            onChange={(e) => setTitle(e.target.value)}
+            className="bg-transparent font-medium text-sm px-2 py-1 rounded hover:bg-surface-container focus:bg-surface-container focus:outline-none focus:ring-1 focus:ring-primary/30 w-[200px] transition-all"
+            placeholder="Untitled Diagram"
+          />
+
+          <div className="h-4 w-px bg-border mx-1" />
+
+          {/* Menus */}
+          <div className="flex items-center gap-0.5">
+            <div className="relative" ref={fileMenuRef}>
               <button
                 onClick={() => {
-                  setShowExportMenu((value) => !value);
-                  setShowFileMenu(false);
+                  setShowFileMenu((value) => !value);
                   setShowDisplayMenu(false);
-                  setShowAutoLayoutMenu(false);
+                  setShowExportMenu(false);
                 }}
-                className={exportButtonClass}
-                title="Export options"
+                className={`${controlButtonClass} ${showFileMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
               >
-                <Download className="h-4 w-4" />
-                Export
+                File
               </button>
-              {showExportMenu && (
-                <div className={`${headerMenuRightClass} max-h-[70vh] min-w-[280px] overflow-y-auto`}>
-                  <button onClick={() => { runExportSvg(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export SVG</button>
-                  <button onClick={() => { void runExportPng(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export PNG</button>
-                  <button onClick={() => { runExportHtml(); setShowExportMenu(false); }} className={headerMenuItemClass}>Export HTML</button>
-                  <button onClick={() => { void runExportAll(); setShowExportMenu(false); }} className={`mt-1 ${headerMenuItemActiveClass}`}>Export All</button>
-                  <div className="mt-2 border-t border-border p-2.5 text-xs text-foreground/80 space-y-2">
-                    <label className="block">Width<input type="number" value={exportWidth} onChange={(event) => setExportWidth(Number(event.target.value) || 1200)} className={rightPanelFieldCompactClass} /></label>
-                    <label className="block">Height<input type="number" value={exportHeight} onChange={(event) => setExportHeight(Number(event.target.value) || 700)} className={rightPanelFieldCompactClass} /></label>
-                    <label className="block">Padding<input type="number" value={exportPadding} onChange={(event) => setExportPadding(Math.max(0, Number(event.target.value) || 0))} className={rightPanelFieldCompactClass} /></label>
-                    <label className="block">PNG Scale<input type="number" min={1} max={4} value={exportPngScale} onChange={(event) => setExportPngScale(Number(event.target.value))} className={rightPanelFieldCompactClass} /></label>
-                    <label className="block">File Template<input value={exportFileTemplate} onChange={(event) => setExportFileTemplate(event.target.value)} className={rightPanelFieldCompactClass} /></label>
-                    <label className="mt-2 inline-flex items-center gap-2"><input type="checkbox" checked={exportTransparentBg} onChange={(event) => setExportTransparentBg(event.target.checked)} className="rounded" />Transparent</label>
-                  </div>
+              {showFileMenu && (
+                <div className={headerMenuClass}>
+                  <button onClick={() => { handleCreateNewDiagram(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Diagram</button>
+                  <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
+                    <CopyPlus className="h-4 w-4" />Save As
+                  </button>
+                  <div className="my-1 border-t border-border" />
+                  <button onClick={() => { exportConfigJson(); setShowFileMenu(false); }} className={headerMenuItemClass}>
+                    <Download className="h-4 w-4" />Export Config
+                  </button>
+                  <button
+                    onClick={() => { importConfigJsonInputRef.current?.click(); setShowFileMenu(false); }}
+                    className={headerMenuItemClass}
+                  >
+                    <FileUp className="h-4 w-4" />Import Config
+                  </button>
+                  <input
+                    ref={importConfigJsonInputRef}
+                    className="hidden"
+                    type="file"
+                    accept=".json"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) await importConfigJson(file);
+                      if (importConfigJsonInputRef.current) importConfigJsonInputRef.current.value = "";
+                    }}
+                  />
                 </div>
               )}
             </div>
-            <button
-              onClick={() => {
-                const nextTheme = sankeyData.style.theme === "dark" ? "light" : "dark";
-                const currentDefault =
-                  sankeyData.style.theme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-                const nextDefault = nextTheme === "dark" ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR;
-                const nextLabelColor =
-                  sankeyData.style.labelColor === currentDefault ? nextDefault : sankeyData.style.labelColor;
-                patchStyle({ theme: nextTheme, labelColor: nextLabelColor });
-              }}
-              className={themeToggleButtonClass}
-              title={sankeyData.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              aria-label={sankeyData.style.theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            >
-              {sankeyData.style.theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-            </button>
-          </div>
-        </div>
-        {/* Row 2: Text Menus */}
-        <div className="flex h-(--header-row2-height) items-center gap-0.5 px-14">
-          <div className="relative" ref={fileMenuRef}>
-            <button
-              onClick={() => {
-                setShowFileMenu((value) => !value);
-                setShowDisplayMenu(false);
-                setShowAutoLayoutMenu(false);
-                setShowExportMenu(false);
-              }}
-              className={`${controlButtonClass} ${showFileMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
-            >
-              File
-            </button>
-            {showFileMenu && (
-              <div className={headerMenuClass}>
-                <button onClick={() => { router.push("/"); setShowFileMenu(false); }} className={headerMenuItemClass}>Home</button>
-                <button onClick={() => { setShowDocuments((value) => !value); setShowFileMenu(false); }} className={headerMenuItemClass}>Docs</button>
-                <button onClick={() => { createNewDocument(); setShowFileMenu(false); }} className={headerMenuItemClass}>New Document</button>
-                <button onClick={() => { saveAsCopy(); setShowFileMenu(false); }} className={headerMenuItemClass}>
-                  <CopyPlus className="h-4 w-4" />Save As
-                </button>
-                <div className="my-1 border-t border-border" />
-                <button onClick={() => { void deleteCurrentDocument(); setShowFileMenu(false); }} className={`${headerMenuItemClass} text-red-600 dark:text-red-400`}>
-                  <Trash2 className="h-4 w-4" />Delete Current
-                </button>
-              </div>
-            )}
-          </div>
 
-          <div className="relative" ref={displayMenuRef}>
-            <button
-              onClick={() => {
-                setShowDisplayMenu((value) => !value);
-                setShowFileMenu(false);
-                setShowAutoLayoutMenu(false);
-                setShowExportMenu(false);
-              }}
-              className={`${controlButtonClass} ${showDisplayMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
-              title="Display Settings"
-            >
-              Display
-            </button>
-            {showDisplayMenu && (
-              <div className={`${headerMenuClass} w-[280px]`}>
-                <div className="mb-2 flex gap-0.5 p-1 bg-surface-container rounded-lg">
-                  <button
-                    onClick={() => setDisplayMenuTab("view")}
-                    className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "view"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted hover:text-foreground"
-                      }`}
-                  >
-                    View
-                  </button>
-                  {plugin?.StylePanel && (
+            <div className="relative" ref={displayMenuRef}>
+              <button
+                onClick={() => {
+                  setShowDisplayMenu((value) => !value);
+                  setShowFileMenu(false);
+                  setShowExportMenu(false);
+                }}
+                className={`${controlButtonClass} ${showDisplayMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
+                title="Display Settings"
+              >
+                Display
+              </button>
+              {showDisplayMenu && (
+                <div className={`${headerMenuClass} w-[280px] max-h-[80vh] overflow-y-auto thin-scrollbar`}>
+                  <div className="mb-2 flex gap-0.5 p-1 bg-surface-container rounded-lg">
                     <button
-                      onClick={() => setDisplayMenuTab("style")}
-                      className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "style" // mapped "labels"/"layout" to "style" for now
+                      onClick={() => setDisplayMenuTab("view")}
+                      className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "view"
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted hover:text-foreground"
                         }`}
                     >
-                      Design
+                      View
                     </button>
+                    {plugin?.StylePanel && (
+                      <button
+                        onClick={() => setDisplayMenuTab("style")}
+                        className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "style"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted hover:text-foreground"
+                          }`}
+                      >
+                        Design
+                      </button>
+                    )}
+                  </div>
+
+                  {displayMenuTab === "view" && (
+                    <div className="space-y-0.5">
+                      <button onClick={() => { undo(); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-4 w-4" />Undo</button>
+                      <button onClick={() => { redo(); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-4 w-4" />Redo</button>
+                      <button onClick={() => { syncFromEditor(); }} className={headerMenuItemClass}><Play className="h-4 w-4" />Sync</button>
+                      <button onClick={() => { setCanvasResetKey((value) => value + 1); }} className={headerMenuItemClass}>Fit Canvas</button>
+                      <div className="mt-2 border-t border-border pt-2 px-2">
+                        <p className="mb-2 text-xs font-medium text-muted">Trace Mode</p>
+                        <div className="grid grid-cols-3 gap-1">
+                          <button onClick={() => setTraceMode("none")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "none" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>None</button>
+                          <button onClick={() => setTraceMode("upstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "upstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Up</button>
+                          <button onClick={() => setTraceMode("downstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "downstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Down</button>
+                        </div>
+                        <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-muted hover:text-foreground transition-colors">Clear Selection</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {displayMenuTab === "style" && plugin?.StylePanel && (
+                    <plugin.StylePanel
+                      data={currentDoc.data}
+                      onDataChange={onPluginDataChange}
+                    />
                   )}
                 </div>
-
-                {displayMenuTab === "view" && (
-                  <div className="space-y-0.5">
-                    <button onClick={() => { undo(); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-4 w-4" />Undo</button>
-                    <button onClick={() => { redo(); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-4 w-4" />Redo</button>
-                    <button onClick={() => { syncFromEditor(); }} className={headerMenuItemClass}><Play className="h-4 w-4" />Sync</button>
-                    <button onClick={() => { setCanvasResetKey((value) => value + 1); }} className={headerMenuItemClass}>Fit Canvas</button>
-                    <div className="mt-2 border-t border-border pt-2 px-2">
-                      <p className="mb-2 text-xs font-medium text-muted">Trace Mode</p>
-                      <div className="grid grid-cols-3 gap-1">
-                        <button onClick={() => setTraceMode("none")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "none" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>None</button>
-                        <button onClick={() => setTraceMode("upstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "upstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Up</button>
-                        <button onClick={() => setTraceMode("downstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "downstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Down</button>
-                      </div>
-                      <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-muted hover:text-foreground transition-colors">Clear Selection</button>
-                    </div>
-                  </div>
-                )}
-
-                {displayMenuTab === "style" && plugin?.StylePanel && (
-                  <plugin.StylePanel
-                    data={currentDoc.data}
-                    onDataChange={onPluginDataChange}
-                  />
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </div>
+        </div>
 
-          <div className="relative" ref={autoLayoutMenuRef}>
+        {/* Right: Theme Toggle, Export & Share */}
+        <div className="flex items-center gap-2">
+          {/* Theme Toggle */}
+          <button
+            onClick={handleToggleTheme}
+            className="p-1.5 rounded-lg hover:bg-surface-container-high transition-colors text-muted hover:text-foreground"
+            title={docStyleTheme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          >
+            {docStyleTheme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+          {/* Export Menu */}
+          <div className="relative" ref={exportMenuRef}>
             <button
               onClick={() => {
-                setShowAutoLayoutMenu((value) => !value);
+                setShowExportMenu((value) => !value);
                 setShowFileMenu(false);
                 setShowDisplayMenu(false);
-                setShowExportMenu(false);
               }}
-              className={`${controlButtonWideClass} ${showAutoLayoutMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
-              title="Auto-layout options"
+              className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity flex items-center gap-1.5 shadow-sm"
             >
-              Auto-layout
+              <Download className="h-3.5 w-3.5" />
+              Export
             </button>
-            {showAutoLayoutMenu && (
-              <div className={headerMenuClass}>
-                {AUTO_LAYOUT_STRATEGY_OPTIONS.map((item) => (
-                  <button
-                    key={`layout-menu-${item.id}`}
-                    onClick={() => {
-                      setAutoLayoutStrategy(item.id);
-                      applyAutoLayoutStrategy(item.id);
-                      setShowAutoLayoutMenu(false);
-                    }}
-                    className={`md3-state-layer flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs ${autoLayoutStrategy === item.id
-                      ? "bg-primary/8 text-primary font-semibold"
-                      : "text-foreground/80"
-                      }`}
-                  >
-                    <span>{item.label}</span>
-                    {autoLayoutStrategy === item.id && <span className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">Current</span>}
-                  </button>
-                ))}
+            {showExportMenu && (
+              <div className={`${headerMenuClass} w-[280px] right-0 left-auto`}>
+                <div className="px-2 py-1.5">
+                  <span className="text-xs font-semibold text-foreground/80 block mb-2">Export Settings</span>
+
+                  {/* ... Export settings content ... */}
+                  <div className="space-y-3">
+                    {/* Size Inputs */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs">
+                        <span className="text-muted block mb-1">Width</span>
+                        <input
+                          type="number"
+                          value={exportWidth}
+                          onChange={(e) => setExportWidth(Number(e.target.value))}
+                          className="w-full px-2 py-1 rounded bg-surface border border-border text-xs"
+                        />
+                      </label>
+                      <label className="text-xs">
+                        <span className="text-muted block mb-1">Height</span>
+                        <input
+                          type="number"
+                          value={exportHeight}
+                          onChange={(e) => setExportHeight(Number(e.target.value))}
+                          className="w-full px-2 py-1 rounded bg-surface border border-border text-xs"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Scale & Padding */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-xs">
+                        <span className="text-muted block mb-1">Scale (PNG)</span>
+                        <select
+                          value={exportPngScale}
+                          onChange={(e) => setExportPngScale(Number(e.target.value))}
+                          className="w-full px-2 py-1 rounded bg-surface border border-border text-xs"
+                        >
+                          <option value="1">1x</option>
+                          <option value="2">2x</option>
+                          <option value="3">3x</option>
+                          <option value="4">4x</option>
+                        </select>
+                      </label>
+                      <label className="text-xs">
+                        <span className="text-muted block mb-1">Padding</span>
+                        <input
+                          type="number"
+                          value={exportPadding}
+                          onChange={(e) => setExportPadding(Number(e.target.value))}
+                          className="w-full px-2 py-1 rounded bg-surface border border-border text-xs"
+                        />
+                      </label>
+                    </div>
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={exportTransparentBg}
+                          onChange={(e) => setExportTransparentBg(e.target.checked)}
+                          className="rounded border-border"
+                        />
+                        Transparent Background
+                      </label>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="grid grid-cols-1 gap-1 pt-2">
+                      <button onClick={() => handleExport("svg")} className={headerMenuItemClass}><Download className="h-3.5 w-3.5" />Export SVG</button>
+                      <button onClick={() => handleExport("png")} className={headerMenuItemClass}><Download className="h-3.5 w-3.5" />Export PNG</button>
+                      <button onClick={() => handleExport("html")} className={headerMenuItemClass}><Download className="h-3.5 w-3.5" />Export HTML</button>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </div>
       </header>
 
-      {showDocuments && (
-        <div className={documentPopoverClass}>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold uppercase text-muted">All Documents</span>
-          </div>
-          <input
-            value={librarySearch}
-            onChange={(event) => setLibrarySearch(event.target.value)}
-            placeholder={"Search documents"}
-            className="mb-2 w-full rounded-md border border-border bg-[color-mix(in_srgb,var(--bg-elevated)_95%,transparent)] px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
-          />
 
-          <div className="max-h-72 space-y-1 overflow-auto pr-1">
-            {filteredDocuments.length === 0 ? (
-              <p className={`${libraryEmptyStateClass} type-caption`}>
-                No documents found.
-              </p>
-            ) : (
-              filteredDocuments.map((doc) => {
-                const docData = doc.data as unknown as SankeyData;
-                return (
-                  <button
-                    key={doc.id}
-                    onClick={() => openDocumentById(doc.id)}
-                    className={`w-full rounded-lg border px-2 py-2 text-left text-xs transition ${doc.id === currentDoc.id
-                      ? "border-indigo-400/45 bg-indigo-500/18 text-indigo-100"
-                      : "border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800"
-                      }`}
-                  >
-                    <p className="font-medium">{doc.title || "Untitled Diagram"}</p>
-                    <p className="mt-0.5 text-[10px] text-slate-500">
-                      {docData.format?.toUpperCase()} | {new Date(doc.updatedAt).toLocaleString()}
-                    </p>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
       <div className="relative min-h-0 flex-1">
         {activeWorkspaceOverlay !== "none" && (
           <button
@@ -2142,9 +2113,9 @@ export function EditorWorkspace({ docId }: Props) {
                     </button>
                     <button
                       onClick={() => {
-                        const content = sankeyData.editorText;
-                        const mime = sankeyData.format === "json" ? "application/json" : "text/plain";
-                        const ext = sankeyData.format === "json" ? "json" : sankeyData.format === "csv" ? "csv" : "dsl";
+                        const content = docEditorText;
+                        const mime = docFormat === "json" ? "application/json" : "text/plain";
+                        const ext = docFormat === "json" ? "json" : docFormat === "csv" ? "csv" : "dsl";
                         downloadFile(`sankey-data.${ext}`, mime, content);
                       }}
                       className={toolbarIconButtonClass}
@@ -2166,13 +2137,13 @@ export function EditorWorkspace({ docId }: Props) {
                       onClick={() => {
                         const newDoc = {
                           ...currentDoc,
-                          data: { ...sankeyData, format: fmt.id as DataFormat } as unknown as Record<string, unknown>
+                          data: { ...docData, format: fmt.id as DataFormat } as unknown as Record<string, unknown>
                         };
                         void upsertDocument(newDoc).then(() => {
                           setCurrentDocumentId(newDoc.id);
                         });
                       }}
-                      className={`md3-segmented-btn flex-1 ${sankeyData.format === fmt.id ? "active" : ""}`}
+                      className={`md3-segmented-btn flex-1 ${docFormat === fmt.id ? "active" : ""}`}
                     >
                       {fmt.label}
                     </button>
@@ -2199,9 +2170,9 @@ export function EditorWorkspace({ docId }: Props) {
                 )}
 
                 <SankeyMonacoEditor
-                  value={sankeyData.editorText}
-                  format={sankeyData.format}
-                  theme={sankeyData.style.theme}
+                  value={docEditorText}
+                  format={docFormat}
+                  theme={docStyleTheme}
                   onChange={setEditorText}
                   marker={parseIssue}
                 />
@@ -2309,7 +2280,6 @@ export function EditorWorkspace({ docId }: Props) {
             onClose={closeEditorModal}
           />
         )}
-
 
         {dialogNode}
 

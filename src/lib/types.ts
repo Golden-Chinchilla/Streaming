@@ -13,8 +13,7 @@ export type PerformanceMode = "auto" | "quality" | "balanced" | "performance";
  * Every diagram type has a unique string identifier.
  * New diagram types are added here as a union member.
  */
-export type DiagramType = "sankey";
-// Future: | "swimlane" | "flowchart" | ...
+export type DiagramType = "sankey" | "swimlane";
 
 /**
  * The editor can operate in different modes depending on the diagram type.

@@ -33,6 +33,9 @@ export type SankeyStyle = {
     palette: "classic" | "ocean" | "sunset";
     linkGradient?: boolean;
     transparent?: boolean;
+    align?: "justify" | "left" | "right" | "center";
+    linkBlendMode?: "normal" | "multiply";
+    labelThreshold?: number;
 };
 
 /**

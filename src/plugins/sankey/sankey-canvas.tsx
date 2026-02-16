@@ -1,7 +1,7 @@
 "use client";
 
-import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SankeyGraph as D3SankeyGraph, sankey, SankeyLink, SankeyNode } from "d3-sankey";
+import React, { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SankeyGraph as D3SankeyGraph, sankey, SankeyLink, SankeyNode, sankeyCenter, sankeyJustify, sankeyLeft, sankeyRight } from "d3-sankey";
 import { CanvasProps } from "@/lib/diagram-registry";
 import { SankeyData } from "./sankey-types";
 import { parseSankeyTextDetailed } from "./sankey-parse";
@@ -107,6 +107,24 @@ export function SankeyCanvas({
     onZoomChange = () => { },
   } = (interactionState || {}) as SankeyInteractionState;
 
+  // Sync theme with system/DOM preference on mount
+  useEffect(() => {
+    // Check if a 'dark' class exists on document.documentElement (Tailwind standard)
+    const isSystemDark = document.documentElement.classList.contains("dark");
+    const currentTheme = style.theme;
+
+    // Only auto-switch if the user hasn't explicitly set a preference (which we can't easily contextualize here without more state),
+    // OR, more aggressively, we just trust the system/app wrapper class implies the desired viewing mode.
+    // To be safe, let's say: if the Current Data Theme is inconsistent with the App Wrapper, update Data Theme.
+    if (isSystemDark && currentTheme === "light") {
+      onDataChange?.({
+        ...data,
+        style: { ...style, theme: "dark", labelColor: DARK_LABEL_COLOR }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount — intentional: sync theme only on initial render
+
   // Internal Parsing
   const { graph } = useMemo(() => {
     const result = parseSankeyTextDetailed(editorText, format);
@@ -166,7 +184,6 @@ export function SankeyCanvas({
   const labelStyle = style.labelStyle ?? "badge";
   const linkRender = style.linkRender ?? "soft";
   const isDark = style.theme === "dark";
-  const canvasBg = isDark ? "var(--canvas-bg)" : "var(--canvas-bg)";
   const tooltipBg = isDark ? "var(--bg-secondary)" : "var(--text-primary)";
   const labelColor = style.labelColor || (isDark ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR);
   const insideLabelColor = isDark ? "rgba(248,250,252,0.96)" : "rgba(15,23,42,0.92)";
@@ -455,6 +472,13 @@ export function SankeyCanvas({
     const generator = sankey<NodeDatum, LinkDatum>()
       .nodeId((node) => node.id)
       .nodeAlign((node, depthCount) => {
+        // If user specified an alignment, use it (and let D3 handle the layers naturally, even with dummy nodes)
+        if (style.align === "left") return sankeyLeft(node, depthCount);
+        if (style.align === "right") return sankeyRight(node, depthCount);
+        if (style.align === "center") return sankeyCenter(node, depthCount);
+        if (style.align === "justify") return sankeyJustify(node, depthCount);
+
+        // Default to the explicit layering logic if no specific align is requested (or for 'custom')
         const maxLayer = Math.max(0, depthCount - 1);
         const explicitLayer = expandedGraph.layerById.get(node.id);
         const fallbackLayer = explicitLayer ?? node.depth ?? 0;
@@ -489,9 +513,7 @@ export function SankeyCanvas({
 
     generator.update(built);
     return built;
-    generator.update(built);
-    return built;
-  }, [expandedGraph, layoutOrdering, nodePositions, style.nodePadding, style.nodeWidth, RIGHT, BOTTOM, clampNodeTop]);
+  }, [expandedGraph, layoutOrdering, nodePositions, style.nodePadding, style.nodeWidth, style.align, RIGHT, BOTTOM, clampNodeTop]);
 
   const sourceName = (link: SankeyLink<NodeDatum, LinkDatum>) =>
     (link.source as SankeyNode<NodeDatum, LinkDatum>).id;
@@ -659,12 +681,15 @@ export function SankeyCanvas({
     return values;
   }, [layout.links, layout.nodes]);
 
-  const maxLinkValue = useMemo(() => {
+  const { maxLinkValue, totalLinkValue } = useMemo(() => {
     let maxValue = 0;
+    let totalValue = 0;
     for (const link of displayLinks) {
-      maxValue = Math.max(maxValue, link.value ?? 0);
+      const v = link.value ?? 0;
+      maxValue = Math.max(maxValue, v);
+      totalValue += v;
     }
-    return maxValue || 1;
+    return { maxLinkValue: maxValue || 1, totalLinkValue: totalValue || 1 };
   }, [displayLinks]);
 
   const nodeColorMap = useMemo(() => {
@@ -688,35 +713,69 @@ export function SankeyCanvas({
     const highlightedLinks = new Set<number>();
     const softenedLinks = new Set<number>();
 
+    // Full chain path highlighting logic (BFS Upstream + Downstream)
+    const highlightPath = (startNodeIds: string[]) => {
+      const queue = [...startNodeIds];
+      const visited = new Set(startNodeIds);
+
+      // Add initial nodes
+      startNodeIds.forEach(id => highlightedNodes.add(id));
+
+      // 1. Trace Downstream
+      queue.length = 0;
+      queue.push(...startNodeIds);
+      visited.clear();
+      startNodeIds.forEach(id => visited.add(id));
+
+      while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        displayLinks.forEach((link, idx) => {
+          if (link.originalSource === currentId) {
+            highlightedLinks.add(idx);
+            if (!highlightedNodes.has(link.originalTarget)) {
+              highlightedNodes.add(link.originalTarget);
+              queue.push(link.originalTarget);
+            }
+          }
+        });
+      }
+
+      // 2. Trace Upstream
+      queue.length = 0;
+      queue.push(...startNodeIds);
+      visited.clear();
+      startNodeIds.forEach(id => visited.add(id));
+
+      while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        displayLinks.forEach((link, idx) => {
+          if (link.originalTarget === currentId) {
+            highlightedLinks.add(idx);
+            if (!highlightedNodes.has(link.originalSource)) {
+              highlightedNodes.add(link.originalSource);
+              queue.push(link.originalSource);
+            }
+          }
+        });
+      }
+    };
+
     if (hoveredNodeId) {
-      highlightedNodes.add(hoveredNodeId);
-      displayLinks.forEach((link, index) => {
-        const connected =
-          link.originalSource === hoveredNodeId || link.originalTarget === hoveredNodeId;
-        if (!connected) return;
-        highlightedLinks.add(index);
-        highlightedNodes.add(link.originalSource);
-        highlightedNodes.add(link.originalTarget);
-      });
+      highlightPath([hoveredNodeId]);
+    } else if (hoveredLinkIndex != null) {
+      const link = displayLinks[hoveredLinkIndex];
+      // Highlight specific link and trace from both ends
+      highlightedLinks.add(hoveredLinkIndex);
+      highlightPath([link.originalSource, link.originalTarget]);
     }
 
-    if (hoveredLinkIndex != null && hoveredLinkIndex >= 0 && hoveredLinkIndex < displayLinks.length) {
-      const activeLink = displayLinks[hoveredLinkIndex];
-      highlightedLinks.add(hoveredLinkIndex);
-      highlightedNodes.add(activeLink.originalSource);
-      highlightedNodes.add(activeLink.originalTarget);
-
-      displayLinks.forEach((link, index) => {
-        if (highlightedLinks.has(index)) return;
-        const sharesEndpoint =
-          link.originalSource === activeLink.originalSource ||
-          link.originalSource === activeLink.originalTarget ||
-          link.originalTarget === activeLink.originalSource ||
-          link.originalTarget === activeLink.originalTarget;
-        if (sharesEndpoint) {
-          softenedLinks.add(index);
-          highlightedNodes.add(link.originalSource);
-          highlightedNodes.add(link.originalTarget);
+    // Soften others (optional, logic kept from before but simplified)
+    if (highlightedLinks.size > 0) {
+      displayLinks.forEach((link, idx) => {
+        if (!highlightedLinks.has(idx)) {
+          // Check if it shares a node with highlighted path? 
+          // For now just everything else is dimmed (handled by renderer usually)
+          // But we can add "softened" if we want a second degree of highlight
         }
       });
     }
@@ -835,7 +894,6 @@ export function SankeyCanvas({
   return (
     <div
       className={`relative h-full w-full overflow-hidden rounded-2xl border ${cursorClass} ${isDark ? "border-slate-700 bg-slate-950/70" : "border-slate-300 bg-white/90"}`}
-      style={{ backgroundColor: canvasBg }}
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_16%,rgba(56,189,248,0.05)_0%,transparent_62%),radial-gradient(ellipse_at_82%_72%,rgba(244,114,182,0.035)_0%,transparent_56%)]" />
       <div className={zoomPillClass}>
@@ -904,46 +962,73 @@ export function SankeyCanvas({
                   return `M${x0},${link.y0}C${xi},${link.y0} ${xj},${link.y1} ${x1},${link.y1}`;
                 })();
 
+              // 1. Calculate Staggered Delay based on horizontal position (x0)
+              // The further right, the longer the delay.
+              const delay = (sourceNode.x0 ?? 0) / VIEW_WIDTH * 0.6; // 0.6s total spread
+
               return (
-                <path
-                  key={`link-${index}`}
-                  d={path}
-                  fill="none"
-                  stroke={baseColor}
-                  strokeOpacity={opacity}
-                  strokeWidth={
-                    hoveredLinkIndex === index || selectedLinkIndex === originalIndex || pulseLinkIndex === originalIndex
-                      ? Math.max(2, baseWidth + 1)
-                      : baseWidth
-                  }
-                  strokeLinecap="butt"
-                  strokeLinejoin={linkRender === "soft" ? "round" : "miter"}
-                  className={!isPanActive && interactionMode === "select" ? "cursor-pointer" : "cursor-grab"}
-                  onMouseDown={(event) => {
-                    if (event.button !== 0) return;
-                    if (isPanActive || interactionMode !== "select") return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onLinkSelectionChange(originalIndex);
-                    if (onLinkEditRequest) {
-                      onLinkEditRequest(originalIndex, {
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
+
+                <React.Fragment key={`link-${index}`}>
+                  {/* Global animation style (injected once practically, or we rely on class) */}
+                  {index === 0 && (
+                    <style dangerouslySetInnerHTML={{
+                      __html: `
+                        @keyframes sankey-flow {
+                          from { stroke-dashoffset: 1; }
+                          to { stroke-dashoffset: 0; }
+                        }
+                      `
+                    }} />
+                  )}
+                  <path
+                    pathLength="1" // Trick: Normalize path length to 1 for CSS
+                    d={path}
+                    style={{
+                      // In dark mode, 'multiply' makes things invisible against dark bg. Use 'screen' or 'normal'.
+                      mixBlendMode: isDark && style.linkBlendMode === "multiply" ? "screen" : style.linkBlendMode,
+                      strokeDasharray: 1,
+                      strokeDashoffset: 1, // Start hidden
+                      animation: `sankey-flow 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards`, // Smooth ease-out
+                      animationDelay: `${delay}s`
+                    }}
+                    fill="none"
+                    stroke={baseColor}
+                    strokeOpacity={opacity}
+                    strokeWidth={
+                      hoveredLinkIndex === index || selectedLinkIndex === originalIndex || pulseLinkIndex === originalIndex
+                        ? Math.max(2, baseWidth + 1)
+                        : baseWidth
                     }
-                  }}
-                  onMouseEnter={() => {
-                    if (!canHoverLinks) return;
-                    setHoveredLinkIndex(index);
-                    setHoverText(
-                      `${originalSource} -> ${originalTarget} (${formatCompactValue(link.value)})`,
-                    );
-                  }}
-                  onMouseLeave={() => {
-                    setHoveredLinkIndex(null);
-                    setHoverText(null);
-                  }}
-                />
+                    strokeLinecap="butt"
+                    strokeLinejoin={linkRender === "soft" ? "round" : "miter"}
+                    className={!isPanActive && interactionMode === "select" ? "cursor-pointer" : "cursor-grab"}
+                    onMouseDown={(event) => {
+                      if (event.button !== 0) return;
+                      if (isPanActive || interactionMode !== "select") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onLinkSelectionChange(originalIndex);
+                      if (onLinkEditRequest) {
+                        onLinkEditRequest(originalIndex, {
+                          x: event.clientX,
+                          y: event.clientY,
+                        });
+                      }
+                    }}
+                    onMouseEnter={() => {
+                      if (!canHoverLinks) return;
+                      setHoveredLinkIndex(index);
+                      const pct = ((link.value / totalLinkValue) * 100).toFixed(1);
+                      setHoverText(
+                        `${originalSource} → ${originalTarget}: ${formatCompactValue(link.value)} (${pct}%)`,
+                      );
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredLinkIndex(null);
+                      setHoverText(null);
+                    }}
+                  />
+                </React.Fragment>
               );
             })()
           ))}
@@ -987,6 +1072,7 @@ export function SankeyCanvas({
                     ? "start"
                     : "end";
             const nodeValue = nodeValueMap.get(nodeId) ?? 0;
+            const isThresholdHidden = (style.labelThreshold ?? 0) > 0 && nodeValue < (style.labelThreshold ?? 0);
             const valueText = formatCompactValue(nodeValue);
             const titleFontSize = Math.max(16, style.labelFontSize + 4);
             const valueFontSize = Math.max(13, style.labelFontSize + 1);
@@ -1097,7 +1183,7 @@ export function SankeyCanvas({
                     });
                   }}
                 />
-                {canShowLabels && hoverBadgeVisible && (
+                {canShowLabels && !isThresholdHidden && hoverBadgeVisible && (
                   <g pointerEvents="none">
                     <rect
                       x={badgeX}
@@ -1138,7 +1224,7 @@ export function SankeyCanvas({
                     </text>
                   </g>
                 )}
-                {canShowLabels && !hoverBadgeVisible && canShowInsideLabel && (
+                {canShowLabels && !isThresholdHidden && !hoverBadgeVisible && canShowInsideLabel && (
                   <text
                     x={labelX}
                     y={centerY}
@@ -1159,7 +1245,7 @@ export function SankeyCanvas({
                     {nodeId}
                   </text>
                 )}
-                {canShowLabels && !hoverBadgeVisible && !canShowInsideLabel && (
+                {canShowLabels && !isThresholdHidden && !hoverBadgeVisible && !canShowInsideLabel && (
                   <g pointerEvents="none">
                     <text
                       x={labelX}

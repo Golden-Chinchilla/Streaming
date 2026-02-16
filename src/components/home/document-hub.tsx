@@ -26,9 +26,13 @@ import {
     Plus,
     Search,
     MoreVertical,
-    X
+    X,
+    Sun,
+    Moon,
+    Trash2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { deleteDocumentById, deleteDocumentsByIds, saveAppPreferences, loadAppPreferences } from "@/lib/storage";
 
 /* ------------------------------------------------------------------ */
 /*  Types & Props                                                     */
@@ -47,6 +51,11 @@ export function DocumentHub() {
     const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [viewMode, setViewMode] = useState<ViewMode>("grid");
+    const [theme, setTheme] = useState<"light" | "dark">("dark");
+    const [activeMenuDocId, setActiveMenuId] = useState<string | null>(null);
+
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
 
     // Dialog states
     const [isNewDiagramOpen, setIsNewDiagramOpen] = useState(false);
@@ -66,6 +75,16 @@ export function DocumentHub() {
 
     useEffect(() => {
         void refreshData();
+        // Load theme preference
+        loadAppPreferences().then((prefs) => {
+            setTheme(prefs.defaultTheme);
+            document.documentElement.setAttribute("data-theme", prefs.defaultTheme);
+        });
+
+        // Close menu on global click
+        const handleGlobalClick = () => setActiveMenuId(null);
+        window.addEventListener("click", handleGlobalClick);
+        return () => window.removeEventListener("click", handleGlobalClick);
     }, []);
 
     // Filtered documents
@@ -91,8 +110,6 @@ export function DocumentHub() {
 
     // Handlers
     const handleCreateFolder = async () => {
-        if (!newFolderName.trim()) return;
-        // eslint-disable-next-line
         const now = Date.now();
         const newFolder: Folder = {
             id: crypto.randomUUID(),
@@ -124,6 +141,49 @@ export function DocumentHub() {
 
         await upsertDocument(newDoc);
         router.push(`/editor?id=${newDoc.id}`);
+    };
+
+    const handleDeleteDocument = async (docId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (confirm("Are you sure you want to delete this document?")) {
+            await deleteDocumentById(docId);
+            void refreshData();
+        }
+        setActiveMenuId(null);
+    };
+
+    const handleToggleTheme = async () => {
+        const next = theme === "dark" ? "light" : "dark";
+        setTheme(next);
+        document.documentElement.setAttribute("data-theme", next);
+        const prefs = await loadAppPreferences();
+        await saveAppPreferences({ ...prefs, defaultTheme: next });
+    };
+
+    const toggleSelectionMode = () => {
+        setIsSelectionMode(!isSelectionMode);
+        setSelectedDocIds(new Set());
+    };
+
+    const toggleDocumentSelection = (docId: string) => {
+        const next = new Set(selectedDocIds);
+        if (next.has(docId)) {
+            next.delete(docId);
+        } else {
+            next.add(docId);
+        }
+        setSelectedDocIds(next);
+    };
+
+    const handleBatchDelete = async () => {
+        if (selectedDocIds.size === 0) return;
+        if (confirm(`Are you sure you want to delete ${selectedDocIds.size} documents?`)) {
+            const ids = Array.from(selectedDocIds);
+            await deleteDocumentsByIds(ids);
+            setIsSelectionMode(false);
+            setSelectedDocIds(new Set());
+            void refreshData();
+        }
     };
 
     return (
@@ -195,27 +255,62 @@ export function DocumentHub() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                        <div className="flex bg-surface-container rounded-lg p-0.5 border border-border">
-                            <button
-                                onClick={() => setViewMode("grid")}
-                                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-surface shadow-sm text-foreground" : "text-muted hover:text-foreground"}`}
-                            >
-                                <LayoutGrid className="w-4 h-4" />
-                            </button>
-                            <button
-                                onClick={() => setViewMode("list")}
-                                className={`p-1.5 rounded-md transition-all ${viewMode === "list" ? "bg-surface shadow-sm text-foreground" : "text-muted hover:text-foreground"}`}
-                            >
-                                <List className="w-4 h-4" />
-                            </button>
-                        </div>
-                        <button
-                            onClick={() => setIsNewDiagramOpen(true)}
-                            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-medium hover:opacity-90 transition-opacity shadown-sm"
-                        >
-                            <Plus className="w-4 h-4" />
-                            New Diagram
-                        </button>
+                        {isSelectionMode ? (
+                            <>
+                                <span className="text-sm font-medium">{selectedDocIds.size} selected</span>
+                                <button
+                                    onClick={toggleSelectionMode}
+                                    className="px-3 py-1.5 rounded-lg text-sm font-medium text-muted hover:text-foreground hover:bg-surface-container transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleBatchDelete}
+                                    disabled={selectedDocIds.size === 0}
+                                    className="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                    Delete ({selectedDocIds.size})
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <button
+                                    onClick={toggleSelectionMode}
+                                    className="px-3 py-1.5 rounded-lg text-sm font-medium text-muted hover:text-foreground hover:bg-surface-container transition-colors"
+                                >
+                                    Select
+                                </button>
+                                <div className="h-6 w-px bg-border sm:block hidden" />
+                                <div className="flex bg-surface-container rounded-lg p-0.5 border border-border">
+                                    <button
+                                        onClick={() => setViewMode("grid")}
+                                        className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-surface shadow-sm text-foreground" : "text-muted hover:text-foreground"}`}
+                                    >
+                                        <LayoutGrid className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => setViewMode("list")}
+                                        className={`p-1.5 rounded-md transition-all ${viewMode === "list" ? "bg-surface shadow-sm text-foreground" : "text-muted hover:text-foreground"}`}
+                                    >
+                                        <List className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={handleToggleTheme}
+                                    className="p-2 rounded-full text-muted hover:text-foreground hover:bg-surface-container transition-colors"
+                                    title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                                >
+                                    {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                                </button>
+                                <button
+                                    onClick={() => setIsNewDiagramOpen(true)}
+                                    className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-medium hover:opacity-90 transition-opacity shadown-sm"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                    New Diagram
+                                </button>
+                            </>
+                        )}
                     </div>
                 </header>
 
@@ -240,17 +335,51 @@ export function DocumentHub() {
                                         layout
                                         initial={{ opacity: 0, scale: 0.95 }}
                                         animate={{ opacity: 1, scale: 1 }}
-                                        whileHover={{ y: -2 }}
-                                        className="group relative bg-surface border border-border rounded-xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer"
-                                        onClick={() => router.push(`/editor?id=${doc.id}`)}
+                                        whileHover={!isSelectionMode ? { y: -2 } : {}}
+                                        className={`group relative bg-surface border rounded-xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer ${isSelectionMode && selectedDocIds.has(doc.id) ? "border-primary ring-1 ring-primary" : "border-border"}`}
+                                        onClick={() => {
+                                            if (isSelectionMode) {
+                                                toggleDocumentSelection(doc.id);
+                                            } else {
+                                                router.push(`/editor?id=${doc.id}`);
+                                            }
+                                        }}
                                     >
                                         <div className="flex items-start justify-between mb-4">
-                                            <div className={`p-2 rounded-lg ${plugin ? "bg-primary/10 text-primary" : "bg-surface-container text-muted"}`}>
-                                                <Icon className="w-6 h-6" />
+                                            <div className="flex gap-3">
+                                                {isSelectionMode && (
+                                                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedDocIds.has(doc.id) ? "bg-primary border-primary text-primary-foreground" : "border-border bg-surface-container"}`}>
+                                                        {selectedDocIds.has(doc.id) && <motion.svg initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></motion.svg>}
+                                                    </div>
+                                                )}
+                                                <div className={`p-2 rounded-lg ${plugin ? "bg-primary/10 text-primary" : "bg-surface-container text-muted"}`}>
+                                                    <Icon className="w-6 h-6" />
+                                                </div>
                                             </div>
-                                            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button className="p-1 hover:bg-surface-container rounded text-muted"> <MoreVertical className="w-4 h-4" /> </button>
-                                            </div>
+                                            {!isSelectionMode && (
+                                                <div className="opacity-0 group-hover:opacity-100 transition-opacity relative">
+                                                    <button
+                                                        className="p-1 hover:bg-surface-container rounded text-muted"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setActiveMenuId(activeMenuDocId === doc.id ? null : doc.id);
+                                                        }}
+                                                    >
+                                                        <MoreVertical className="w-4 h-4" />
+                                                    </button>
+                                                    {activeMenuDocId === doc.id && (
+                                                        <div className="absolute right-0 top-full mt-1 w-32 bg-surface-container-high border border-border rounded-lg shadow-lg z-20 py-1">
+                                                            <button
+                                                                className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-surface-container flex items-center gap-2"
+                                                                onClick={(e) => handleDeleteDocument(doc.id, e)}
+                                                            >
+                                                                <Trash2 className="w-3.5 h-3.5" />
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                         <h3 className="font-medium text-foreground truncate">{doc.title}</h3>
                                         <p className="text-xs text-muted mt-1">{new Date(doc.updatedAt).toLocaleDateString()}</p>
@@ -276,19 +405,51 @@ export function DocumentHub() {
                                         return (
                                             <tr
                                                 key={doc.id}
-                                                className="border-b border-border last:border-0 hover:bg-surface-container-low transition-colors cursor-pointer"
-                                                onClick={() => router.push(`/editor?id=${doc.id}`)}
+                                                className={`border-b border-border last:border-0 hover:bg-surface-container-low transition-colors cursor-pointer ${isSelectionMode && selectedDocIds.has(doc.id) ? "bg-primary/5" : ""}`}
+                                                onClick={() => {
+                                                    if (isSelectionMode) {
+                                                        toggleDocumentSelection(doc.id);
+                                                    } else {
+                                                        router.push(`/editor?id=${doc.id}`);
+                                                    }
+                                                }}
                                             >
                                                 <td className="px-6 py-4 font-medium text-foreground flex items-center gap-3">
+                                                    {isSelectionMode && (
+                                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedDocIds.has(doc.id) ? "bg-primary border-primary text-primary-foreground" : "border-border bg-surface-container"}`}>
+                                                            {selectedDocIds.has(doc.id) && <motion.svg initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></motion.svg>}
+                                                        </div>
+                                                    )}
                                                     <Icon className="w-4 h-4 text-muted" />
                                                     {doc.title}
                                                 </td>
                                                 <td className="px-6 py-4 text-muted">{plugin?.displayName || doc.diagramType}</td>
                                                 <td className="px-6 py-4 text-muted">{new Date(doc.updatedAt).toLocaleString()}</td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <button className="p-1 hover:bg-surface-container rounded text-muted" onClick={(e) => { e.stopPropagation(); /* Menu */ }}>
-                                                        <MoreVertical className="w-4 h-4" />
-                                                    </button>
+                                                <td className="px-6 py-4 text-right relative">
+                                                    {!isSelectionMode && (
+                                                        <>
+                                                            <button
+                                                                className="p-1 hover:bg-surface-container rounded text-muted"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setActiveMenuId(activeMenuDocId === doc.id ? null : doc.id);
+                                                                }}
+                                                            >
+                                                                <MoreVertical className="w-4 h-4" />
+                                                            </button>
+                                                            {activeMenuDocId === doc.id && (
+                                                                <div className="absolute right-6 top-8 w-32 bg-surface-container-high border border-border rounded-lg shadow-lg z-20 py-1 text-left">
+                                                                    <button
+                                                                        className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-surface-container flex items-center gap-2"
+                                                                        onClick={(e) => handleDeleteDocument(doc.id, e)}
+                                                                    >
+                                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                                        Delete
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </>
+                                                    )}
                                                 </td>
                                             </tr>
                                         );

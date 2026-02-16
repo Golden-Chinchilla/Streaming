@@ -137,7 +137,60 @@ function getCsvFieldColumn(text: string, lineNumber: number, fieldIndex: number)
     return starts[fieldIndex] ?? 1;
 }
 
+function detectCycle(links: SankeyLinkInput[]): string[] | null {
+    const adj = new Map<string, string[]>();
+    const nodeSet = new Set<string>();
+    for (const link of links) {
+        if (!adj.has(link.source)) adj.set(link.source, []);
+        adj.get(link.source)!.push(link.target);
+        nodeSet.add(link.source);
+        nodeSet.add(link.target);
+    }
+
+    const visited = new Set<string>();
+    const recStack = new Set<string>();
+    const path: string[] = [];
+
+    function dfs(node: string): boolean {
+        visited.add(node);
+        recStack.add(node);
+        path.push(node);
+
+        const neighbors = adj.get(node) || [];
+        for (const neighbor of neighbors) {
+            if (!visited.has(neighbor)) {
+                if (dfs(neighbor)) return true;
+            } else if (recStack.has(neighbor)) {
+                path.push(neighbor);
+                return true;
+            }
+        }
+
+        recStack.delete(node);
+        path.pop();
+        return false;
+    }
+
+    // Sort nodes to ensure deterministic error messages
+    const sortedNodes = Array.from(nodeSet).sort();
+    for (const node of sortedNodes) {
+        if (!visited.has(node)) {
+            if (dfs(node)) return path;
+        }
+    }
+    return null;
+}
+
 function buildGraph(links: SankeyLinkInput[]): SankeyGraph {
+    const cycle = detectCycle(links);
+    if (cycle) {
+        // Find the start of the cycle in the path
+        const lastNode = cycle[cycle.length - 1];
+        const cycleStartIndex = cycle.indexOf(lastNode);
+        const cycleSegment = cycle.slice(cycleStartIndex).join(" → ");
+        throw new Error(`Cycle detected: ${cycleSegment}`);
+    }
+
     const nodeSet = new Set<string>();
     for (const link of links) {
         nodeSet.add(link.source);
@@ -186,7 +239,7 @@ function parseJson(text: string): SankeyParseResult {
                 },
             };
         }
-        return { ok: false, issue: { message: "JSON schema error", line: 1, column: 1 } };
+        return { ok: false, issue: { message: error instanceof Error ? error.message : "JSON schema error", line: 1, column: 1 } };
     }
 }
 
@@ -294,7 +347,18 @@ function parseCsv(text: string): SankeyParseResult {
         return { ok: false, issue: { message: "CSV has no valid rows", line: 1, column: 1 } };
     }
 
-    return { ok: true, graph: buildGraph(links) };
+    try {
+        return { ok: true, graph: buildGraph(links) };
+    } catch (e) {
+        return {
+            ok: false,
+            issue: {
+                message: e instanceof Error ? e.message : "Graph validation error",
+                line: 1,
+                column: 1,
+            },
+        };
+    }
 }
 
 function parseFlowDsl(text: string): SankeyParseResult | null {
@@ -369,7 +433,18 @@ function parseFlowDsl(text: string): SankeyParseResult | null {
         };
     }
 
-    return { ok: true, graph: buildGraph(links) };
+    try {
+        return { ok: true, graph: buildGraph(links) };
+    } catch (e) {
+        return {
+            ok: false,
+            issue: {
+                message: e instanceof Error ? e.message : "Graph validation error",
+                line: 1,
+                column: 1,
+            },
+        };
+    }
 }
 
 export function parseSankeyText(text: string, format: DataFormat): SankeyGraph {

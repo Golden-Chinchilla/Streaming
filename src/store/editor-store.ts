@@ -58,7 +58,6 @@ type EditorState = {
   hasHydrated: boolean;
   selectedNodeIds: string[];
   selectedLinkIndex: number | null;
-  traceMode: "none" | "upstream" | "downstream";
   historyPast: BaseDocument[];
   historyFuture: BaseDocument[];
 
@@ -84,7 +83,6 @@ type EditorState = {
   setSelectedLinkIndex: (index: number | null) => void;
   toggleNodeSelection: (nodeId: string, additive: boolean) => void;
   clearSelection: () => void;
-  setTraceMode: (mode: "none" | "upstream" | "downstream") => void;
 
   // Node/link styling
   applyNodeColorToSelection: (color: string) => void;
@@ -179,7 +177,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   hasHydrated: false,
   selectedNodeIds: [],
   selectedLinkIndex: null,
-  traceMode: "none",
   historyPast: [],
   historyFuture: [],
 
@@ -358,7 +355,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   clearSelection: () => set({ selectedNodeIds: [], selectedLinkIndex: null }),
-  setTraceMode: (mode) => set({ traceMode: mode }),
 
   applyNodeColorToSelection: (color) =>
     set((state) => {

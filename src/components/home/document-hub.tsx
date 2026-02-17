@@ -145,10 +145,8 @@ export function DocumentHub() {
 
     const handleDeleteDocument = async (docId: string, e: React.MouseEvent) => {
         e.stopPropagation();
-        if (confirm("Are you sure you want to delete this document?")) {
-            await deleteDocumentById(docId);
-            void refreshData();
-        }
+        await deleteDocumentById(docId);
+        void refreshData();
         setActiveMenuId(null);
     };
 
@@ -304,7 +302,7 @@ export function DocumentHub() {
                                 </button>
                                 <button
                                     onClick={() => setIsNewDiagramOpen(true)}
-                                    className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-medium hover:opacity-90 transition-opacity shadown-sm"
+                                    className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-medium hover:opacity-90 transition-opacity shadow-sm"
                                 >
                                     <Plus className="w-4 h-4" />
                                     New Diagram
@@ -332,11 +330,12 @@ export function DocumentHub() {
                                 return (
                                     <motion.div
                                         key={doc.id}
-                                        layout
+                                        layout="position"
                                         initial={{ opacity: 0, scale: 0.95 }}
                                         animate={{ opacity: 1, scale: 1 }}
-                                        whileHover={!isSelectionMode ? { y: -2 } : {}}
-                                        className={`group relative bg-surface border rounded-xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer ${isSelectionMode && selectedDocIds.has(doc.id) ? "border-primary ring-1 ring-primary" : "border-border"}`}
+                                        whileHover={!isSelectionMode ? { boxShadow: "0 12px 30px -16px rgba(15, 23, 42, 0.18)" } : {}}
+                                        transition={{ layout: { duration: 0.22, ease: "easeOut" } }}
+                                        className={`group relative bg-surface border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer ${isSelectionMode && selectedDocIds.has(doc.id) ? "border-primary ring-1 ring-primary" : "border-border"}`}
                                         onClick={() => {
                                             if (isSelectionMode) {
                                                 toggleDocumentSelection(doc.id);

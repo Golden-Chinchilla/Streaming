@@ -176,7 +176,6 @@ export function detectSwimlaneCycle(edges: SwimlaneEdge[]): string[] | null {
         path.push(node);
         for (const next of adj.get(node) ?? []) {
             if (inStack.has(next)) {
-                const cycleStart = path.indexOf(next);
                 return true; // cycle found
             }
             if (!visited.has(next) && dfs(next)) return true;
@@ -257,9 +256,6 @@ function parseJson(text: string): SwimlaneParseResult {
         }
         seenNodeIds.add(node.id);
     }
-
-    // Cycle warning (non-blocking)
-    const cycle = detectSwimlaneCycle(data.edges);
 
     const lanes: SwimlaneLane[] = data.lanes.map((l) => ({
         id: l.id,

@@ -247,6 +247,7 @@ export function EditorWorkspace({ docId }: Props) {
     const docMap = new Map(allDocuments.map(d => [d.id, d]));
     return openDocIds.map(id => docMap.get(id)).filter((d): d is BaseDocument => d != null);
   }, [allDocuments, openDocIds]);
+  const hasOpenTabs = openDocIds.length > 0;
 
 
 
@@ -276,7 +277,6 @@ export function EditorWorkspace({ docId }: Props) {
     hasHydrated,
     selectedNodeIds,
     selectedLinkIndex,
-    traceMode,
     historyPast,
     historyFuture,
     initialize,
@@ -291,7 +291,6 @@ export function EditorWorkspace({ docId }: Props) {
     setSelectedNodeIds,
     setSelectedLinkIndex,
     clearSelection,
-    setTraceMode,
     clearSelectedNodeStyles,
     clearSelectedLinkStyle,
     undo,
@@ -304,7 +303,6 @@ export function EditorWorkspace({ docId }: Props) {
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
-  const [displayMenuTab, setDisplayMenuTab] = useState<"view" | "style">("view");
   const [showWorkspaceQuickMenu, setShowWorkspaceQuickMenu] = useState(false);
 
 
@@ -476,9 +474,7 @@ export function EditorWorkspace({ docId }: Props) {
 
   // Persist open documents
   useEffect(() => {
-    if (openDocIds.length > 0) {
-      saveOpenDocumentIds(openDocIds);
-    }
+    saveOpenDocumentIds(openDocIds);
   }, [openDocIds]);
 
   const handleOpenDocument = (id: string) => {
@@ -493,14 +489,16 @@ export function EditorWorkspace({ docId }: Props) {
     setOpenDocIds(nextIds);
     saveOpenDocumentIds(nextIds); // Force save immediately
 
-    // If closing current document, navigate to another one
-    if (idToClose === docId) {
-      if (nextIds.length > 0) {
-        // Go to the last opened one (or next one)
-        router.push(`/editor?id=${nextIds[nextIds.length - 1]}`);
-      } else {
-        router.push("/");
-      }
+    // Keep route and visible document in sync with tab list.
+    if (nextIds.length === 0) {
+      router.push("/editor");
+      return;
+    }
+
+    const isClosingCurrent = idToClose === currentDoc.id || idToClose === docId;
+    const currentStillOpen = nextIds.includes(currentDoc.id);
+    if (isClosingCurrent || !currentStillOpen) {
+      router.push(`/editor?id=${nextIds[nextIds.length - 1]}`);
     }
   };
 
@@ -819,13 +817,6 @@ export function EditorWorkspace({ docId }: Props) {
       setSelectedNodeIds(filtered);
     }
   }, [graph, selectedNodeIds, setSelectedNodeIds]);
-
-  useEffect(() => {
-    if (selectedNodeIds.length > 0) return;
-    if (traceMode !== "none") {
-      setTraceMode("none");
-    }
-  }, [selectedNodeIds, traceMode, setTraceMode]);
 
   useEffect(() => {
     if (selectedLinkIndex == null) return;
@@ -1269,14 +1260,6 @@ export function EditorWorkspace({ docId }: Props) {
     return () => window.clearTimeout(timer);
   }, [pulseLinkIndex, pulseNodeId]);
 
-
-
-  const clearSelectionWithNotice = () => {
-    if (selectedNodeIds.length === 0 && selectedLinkIndex == null) return;
-    clearSelection();
-    pushCanvasActionIssue("info", "Selection cleared");
-  };
-
   const validateExportRequest = (target: "svg" | "png" | "html" | "all") => {
     const issues: AppIssue[] = [];
 
@@ -1611,7 +1594,7 @@ export function EditorWorkspace({ docId }: Props) {
     initialize(copy);
     await upsertDocument(copy);
     await setCurrentDocumentId(copy.id);
-    router.replace(`/editor?doc=${encodeURIComponent(copy.id)}`);
+    router.replace(`/editor?id=${encodeURIComponent(copy.id)}`);
   };
 
 
@@ -1633,7 +1616,7 @@ export function EditorWorkspace({ docId }: Props) {
 
   // MD3 Dropdown menus — rounded-lg, shadow-base, menu-open animation
   const headerMenuClass =
-    "absolute left-0 top-full mt-1 z-140 min-w-[220px] origin-top-left rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
+    "absolute left-0 top-full mt-1 z-140 min-w-55 origin-top-left rounded-lg border border-border bg-surface-container-high p-1.5 shadow-(--shadow-base) ring-1 ring-black/5 focus:outline-none animate-menu-open";
 
   const headerMenuItemClass =
     "md3-state-layer flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-foreground/80 transition-colors";
@@ -1641,6 +1624,8 @@ export function EditorWorkspace({ docId }: Props) {
   // Floating toggle button for sidebar
   const floatingIconButtonClass =
     "pointer-events-auto md3-state-layer inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-container-high text-foreground shadow-(--shadow-sm) transition-all hover:shadow-(--shadow-base) active:scale-95";
+  const canvasQuickActionButtonClass =
+    "pointer-events-auto md3-state-layer inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-surface-container-high/95 text-foreground/80 shadow-(--shadow-sm) backdrop-blur-sm transition-all hover:text-foreground hover:shadow-(--shadow-base) disabled:cursor-not-allowed disabled:opacity-45";
 
 
   const isNarrowViewport = viewportWidth < 1200;
@@ -1702,7 +1687,6 @@ export function EditorWorkspace({ docId }: Props) {
     isSpacePanning,
     selectedNodeIds: selectedNodeIds || [],
     selectedLinkIndex: selectedLinkIndex || null,
-    traceMode: traceMode || "none",
     pulseLinkIndex: pulseLinkIndex || null,
     pulseNodeId: pulseNodeId || null,
     renderHints,
@@ -1715,7 +1699,6 @@ export function EditorWorkspace({ docId }: Props) {
     isSpacePanning,
     selectedNodeIds,
     selectedLinkIndex,
-    traceMode,
     pulseLinkIndex,
     pulseNodeId,
     renderHints,
@@ -1734,7 +1717,7 @@ export function EditorWorkspace({ docId }: Props) {
     <div className={workspaceClass}>
       <EditorTabs
         documents={openDocuments}
-        activeDocId={docId || null}
+        activeDocId={currentDoc.id || null}
         onSelect={handleOpenDocument}
         onClose={handleCloseDocument}
         onNew={handleCreateNewDiagram}
@@ -1801,70 +1784,29 @@ export function EditorWorkspace({ docId }: Props) {
               )}
             </div>
 
-            <div className="relative" ref={displayMenuRef}>
-              <button
-                onClick={() => {
-                  setShowDisplayMenu((value) => !value);
-                  setShowFileMenu(false);
-                  setShowExportMenu(false);
-                }}
-                className={`${controlButtonClass} ${showDisplayMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
-                title="Display Settings"
-              >
-                Display
-              </button>
-              {showDisplayMenu && (
-                <div className={`${headerMenuClass} w-70 max-h-[80vh] overflow-y-auto thin-scrollbar`}>
-                  <div className="mb-2 flex gap-0.5 p-1 bg-surface-container rounded-lg">
-                    <button
-                      onClick={() => setDisplayMenuTab("view")}
-                      className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "view"
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted hover:text-foreground"
-                        }`}
-                    >
-                      View
-                    </button>
-                    {plugin?.StylePanel && (
-                      <button
-                        onClick={() => setDisplayMenuTab("style")}
-                        className={`flex-1 rounded-md py-1.5 text-xs font-medium capitalize transition-all ${displayMenuTab === "style"
-                          ? "bg-background text-foreground shadow-sm"
-                          : "text-muted hover:text-foreground"
-                          }`}
-                      >
-                        Design
-                      </button>
-                    )}
-                  </div>
-
-                  {displayMenuTab === "view" && (
-                    <div className="space-y-0.5">
-                      <button onClick={() => { undo(); }} disabled={historyPast.length === 0} className={headerMenuItemClass}><Undo2 className="h-4 w-4" />Undo</button>
-                      <button onClick={() => { redo(); }} disabled={historyFuture.length === 0} className={headerMenuItemClass}><Redo2 className="h-4 w-4" />Redo</button>
-                      <button onClick={() => { syncFromEditor(); }} className={headerMenuItemClass}><Play className="h-4 w-4" />Sync</button>
-                      <button onClick={() => { setCanvasResetKey((value) => value + 1); }} className={headerMenuItemClass}>Fit Canvas</button>
-                      <div className="mt-2 border-t border-border pt-2 px-2">
-                        <p className="mb-2 text-xs font-medium text-muted">Trace Mode</p>
-                        <div className="grid grid-cols-3 gap-1">
-                          <button onClick={() => setTraceMode("none")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "none" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>None</button>
-                          <button onClick={() => setTraceMode("upstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "upstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Up</button>
-                          <button onClick={() => setTraceMode("downstream")} className={`rounded-lg px-2 py-1 text-xs font-medium transition ${traceMode === "downstream" ? "bg-primary text-white" : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"}`}>Down</button>
-                        </div>
-                        <button onClick={clearSelectionWithNotice} className="mt-2 w-full text-left text-xs text-muted hover:text-foreground transition-colors">Clear Selection</button>
-                      </div>
-                    </div>
-                  )}
-
-                  {displayMenuTab === "style" && plugin?.StylePanel && (
+            {plugin?.StylePanel && (
+              <div className="relative" ref={displayMenuRef}>
+                <button
+                  onClick={() => {
+                    setShowDisplayMenu((value) => !value);
+                    setShowFileMenu(false);
+                    setShowExportMenu(false);
+                  }}
+                  className={`${controlButtonClass} ${showDisplayMenu ? "bg-black/8 dark:bg-white/12" : ""}`}
+                  title="Design Settings"
+                >
+                  Design
+                </button>
+                {showDisplayMenu && (
+                  <div className={`${headerMenuClass} w-70 max-h-[80vh] overflow-y-auto thin-scrollbar`}>
                     <plugin.StylePanel
                       data={currentDoc.data}
                       onDataChange={onPluginDataChange}
                     />
-                  )}
-                </div>
-              )}
-            </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1886,7 +1828,7 @@ export function EditorWorkspace({ docId }: Props) {
                 setShowFileMenu(false);
                 setShowDisplayMenu(false);
               }}
-              className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-opacity flex items-center gap-1.5 shadow-sm"
+              className="px-3 py-1.5 text-xs font-semibold bg-primary text-on-primary rounded-md border border-primary/35 hover:brightness-95 dark:hover:brightness-110 transition-all flex items-center gap-1.5 shadow-sm"
             >
               <Download className="h-3.5 w-3.5" />
               Export
@@ -2169,28 +2111,105 @@ export function EditorWorkspace({ docId }: Props) {
         </aside>
 
         <main className={canvasContainerClass}>
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: performanceProfile.shouldReduceMotion ? 0.03 : 0.35 }}
-            className="h-full"
-          >
-            {plugin && plugin.Canvas ? (
-              <plugin.Canvas
-                key={canvasResetKey}
-                data={currentDoc.data}
-                width={CANVAS_BASE_WIDTH}
-                height={CANVAS_BASE_HEIGHT}
-                onDataChange={onPluginDataChange}
-                interactionState={interactionState}
-                onSvgReady={setSvgElement}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-muted">
-                {plugin ? "Initializing Canvas..." : "Unknown diagram type"}
+          {hasOpenTabs && (
+            <div className="pointer-events-none absolute left-3 top-3 z-100 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => { undo(); }}
+                disabled={historyPast.length === 0}
+                className={canvasQuickActionButtonClass}
+                title="Undo"
+                aria-label="Undo"
+              >
+                <Undo2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { redo(); }}
+                disabled={historyFuture.length === 0}
+                className={canvasQuickActionButtonClass}
+                title="Redo"
+                aria-label="Redo"
+              >
+                <Redo2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { syncFromEditor(); }}
+                className={canvasQuickActionButtonClass}
+                title="Sync"
+                aria-label="Sync"
+              >
+                <Play className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setCanvasResetKey((value) => value + 1); }}
+                className={`${canvasQuickActionButtonClass} w-auto px-2.5 text-xs font-medium`}
+                title="Fit Canvas"
+                aria-label="Fit Canvas"
+              >
+                Fit
+              </button>
+            </div>
+          )}
+          {hasOpenTabs ? (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: performanceProfile.shouldReduceMotion ? 0.03 : 0.35 }}
+              className="h-full"
+            >
+              {plugin && plugin.Canvas ? (
+                <plugin.Canvas
+                  key={canvasResetKey}
+                  data={currentDoc.data}
+                  width={CANVAS_BASE_WIDTH}
+                  height={CANVAS_BASE_HEIGHT}
+                  onDataChange={onPluginDataChange}
+                  interactionState={interactionState}
+                  onSvgReady={setSvgElement}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-muted">
+                  {plugin ? "Initializing Canvas..." : "Unknown diagram type"}
+                </div>
+              )}
+            </motion.div>
+          ) : (
+            <div className="relative h-full w-full overflow-hidden">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_24%_18%,rgba(56,189,248,0.07)_0%,transparent_55%),radial-gradient(ellipse_at_78%_76%,rgba(30,64,175,0.06)_0%,transparent_58%)]" />
+              <div className="relative z-10 flex h-full items-center justify-center p-6">
+                <div className="w-full max-w-lg rounded-2xl border border-border bg-surface/85 p-8 shadow-(--shadow-base) backdrop-blur-sm">
+                  <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/12 text-primary">
+                    <CopyPlus className="h-6 w-6" />
+                  </div>
+                  <h2 className="text-center text-lg font-semibold text-foreground">No Diagram Open</h2>
+                  <p className="mt-2 text-center text-sm text-muted">
+                    Create a new diagram to start editing in this workspace.
+                  </p>
+                  <div className="mt-6 flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleCreateNewDiagram}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary border border-primary/35 shadow-sm transition-all hover:brightness-95 dark:hover:brightness-110"
+                    >
+                      <CopyPlus className="h-4 w-4" />
+                      New Diagram
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push("/")}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-container px-4 py-2 text-sm font-medium text-foreground/80 transition-colors hover:bg-surface-container-high"
+                    >
+                      <LayoutTemplate className="h-4 w-4" />
+                      Back Home
+                    </button>
+                  </div>
+                </div>
               </div>
-            )}
-          </motion.div>
+            </div>
+          )}
         </main>
 
         {activeEditorModal && activeEditorModal.type === "link" && linkEditDraft && (
@@ -2247,18 +2266,6 @@ export function EditorWorkspace({ docId }: Props) {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

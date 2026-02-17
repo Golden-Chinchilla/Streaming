@@ -33,6 +33,7 @@ export type SwimlaneLane = {
 
 export type SwimlaneStyle = {
     theme: "light" | "dark";
+    orientation?: "horizontal" | "vertical";
     laneHeaderWidth: number;
     nodeRadius: number;
     edgeOpacity: number;

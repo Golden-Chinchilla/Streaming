@@ -2,6 +2,7 @@ import { SwimlaneData, SwimlaneStyle } from "./swimlane-types";
 
 export const defaultSwimlaneStyle: SwimlaneStyle = {
     theme: "dark",
+    orientation: "horizontal",
     laneHeaderWidth: 120,
     nodeRadius: 6,
     edgeOpacity: 0.6,

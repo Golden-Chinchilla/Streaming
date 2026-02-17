@@ -35,6 +35,9 @@ const NODE_COLORS: Record<SwimlaneNodeType, string> = {
     subprocess: "var(--flow-3)",
 };
 
+const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, value));
+
 /* ------------------------------------------------------------------ */
 /*  SwimlaneCanvas                                                    */
 /* ------------------------------------------------------------------ */
@@ -48,6 +51,7 @@ export function SwimlaneCanvas({
 }: CanvasProps<SwimlaneData>) {
     const { style, editorText, format } = data;
     const isDark = style.theme === "dark";
+    const orientation = style.orientation ?? "horizontal";
 
     const svgRef = useRef<SVGSVGElement | null>(null);
     const [zoom, setZoom] = useState(1);
@@ -120,8 +124,8 @@ export function SwimlaneCanvas({
     const LANE_PAD_X = 40;
 
     const laneLayout = useMemo(() => {
-        const layout: { lane: SwimlaneLane; y: number; height: number }[] = [];
-        let currentY = 10;
+        const layout: { lane: SwimlaneLane; start: number; size: number }[] = [];
+        let current = 10;
 
         for (const lane of graph.lanes) {
             const laneNodes = graph.nodes.filter((n) => n.laneId === lane.id);
@@ -129,21 +133,54 @@ export function SwimlaneCanvas({
             for (const node of laneNodes) {
                 maxBottom = Math.max(maxBottom, node.y + node.height + LANE_PAD_Y);
             }
-            const laneHeight = Math.max(LANE_MIN_HEIGHT, maxBottom + LANE_PAD_Y);
-            layout.push({ lane, y: currentY, height: laneHeight });
-            currentY += laneHeight;
+            const laneSize = Math.max(LANE_MIN_HEIGHT, maxBottom + LANE_PAD_Y);
+            layout.push({ lane, start: current, size: laneSize });
+            current += laneSize;
         }
         return layout;
     }, [graph.lanes, graph.nodes, LANE_PAD_Y]);
 
+    const laneStartMap = useMemo(
+        () => new Map(laneLayout.map((entry) => [entry.lane.id, entry.start])),
+        [laneLayout],
+    );
 
-    const totalWidth = useMemo(() => {
+    const laneSpan = useMemo(
+        () => laneLayout.length > 0 ? laneLayout[laneLayout.length - 1].start + laneLayout[laneLayout.length - 1].size + 10 : 0,
+        [laneLayout],
+    );
+
+    const flowSpan = useMemo(() => {
         let maxRight = 0;
         for (const node of graph.nodes) {
             maxRight = Math.max(maxRight, node.x + node.width + LANE_PAD_X);
         }
-        return Math.max(VIEW_WIDTH, HEADER_WIDTH + maxRight + 40);
-    }, [graph.nodes, HEADER_WIDTH, VIEW_WIDTH, LANE_PAD_X]);
+        return HEADER_WIDTH + maxRight + 40;
+    }, [graph.nodes, HEADER_WIDTH, LANE_PAD_X]);
+
+    const flowScale = useMemo(() => {
+        const target = (orientation === "horizontal" ? VIEW_WIDTH : VIEW_HEIGHT) - 40;
+        const minScale = orientation === "horizontal" ? 0.7 : 0.5;
+        return clamp(target / Math.max(flowSpan, 1), minScale, 1.4);
+    }, [orientation, VIEW_WIDTH, VIEW_HEIGHT, flowSpan]);
+
+    const laneScale = useMemo(() => {
+        const target = (orientation === "horizontal" ? VIEW_HEIGHT : VIEW_WIDTH) - 24;
+        return clamp(target / Math.max(laneSpan, 1), 0.9, 1.8);
+    }, [orientation, VIEW_WIDTH, VIEW_HEIGHT, laneSpan]);
+
+    const flowRenderSpan = flowSpan * flowScale;
+    const laneRenderSpan = laneSpan * laneScale;
+
+    const totalWidth = useMemo(
+        () => Math.max(VIEW_WIDTH, orientation === "horizontal" ? flowRenderSpan : laneRenderSpan),
+        [VIEW_WIDTH, orientation, flowRenderSpan, laneRenderSpan],
+    );
+
+    const totalHeight = useMemo(
+        () => Math.max(VIEW_HEIGHT, orientation === "horizontal" ? laneRenderSpan : flowRenderSpan),
+        [VIEW_HEIGHT, orientation, laneRenderSpan, flowRenderSpan],
+    );
 
     // Hover context: path highlighting
     const hoverContext = useMemo(() => {
@@ -172,6 +209,44 @@ export function SwimlaneCanvas({
 
         return { highlightedNodes, highlightedEdges };
     }, [hoveredNodeId, hoveredEdgeId, graph.edges]);
+
+    const orientPoint = useCallback(
+        (x: number, y: number) => (
+            orientation === "horizontal"
+                ? { x: x * flowScale, y: y * laneScale }
+                : { x: y * laneScale, y: x * flowScale }
+        ),
+        [orientation, flowScale, laneScale],
+    );
+
+    const orientRect = useCallback(
+        (x: number, y: number, rectWidth: number, rectHeight: number) => (
+            orientation === "horizontal"
+                ? {
+                    x: x * flowScale,
+                    y: y * laneScale,
+                    width: rectWidth * flowScale,
+                    height: rectHeight * laneScale,
+                }
+                : {
+                    x: y * laneScale,
+                    y: x * flowScale,
+                    width: rectHeight * laneScale,
+                    height: rectWidth * flowScale,
+                }
+        ),
+        [orientation, flowScale, laneScale],
+    );
+
+    const getNodeLayoutPosition = useCallback(
+        (node: SwimlaneNode) => {
+            const laneStart = laneStartMap.get(node.laneId) ?? 0;
+            const baseX = HEADER_WIDTH + node.x;
+            const baseY = laneStart + node.y;
+            return orientPoint(baseX, baseY);
+        },
+        [laneStartMap, HEADER_WIDTH, orientPoint],
+    );
 
     // Coordinate conversion
     const pointerToGraphPoint = useCallback(
@@ -208,24 +283,28 @@ export function SwimlaneCanvas({
     // Edge path generator
     const getEdgePath = useCallback(
         (sourceNode: SwimlaneNode, targetNode: SwimlaneNode): string => {
-            const sx = HEADER_WIDTH + sourceNode.x + sourceNode.width;
-            const sy = (() => {
-                const laneEntry = laneLayout.find((l) => l.lane.id === sourceNode.laneId);
-                return (laneEntry?.y ?? 0) + sourceNode.y + sourceNode.height / 2;
-            })();
-            const tx = HEADER_WIDTH + targetNode.x;
-            const ty = (() => {
-                const laneEntry = laneLayout.find((l) => l.lane.id === targetNode.laneId);
-                return (laneEntry?.y ?? 0) + targetNode.y + targetNode.height / 2;
-            })();
+            const sourcePos = getNodeLayoutPosition(sourceNode);
+            const targetPos = getNodeLayoutPosition(targetNode);
+
+            const sx = sourcePos.x + sourceNode.width;
+            const sy = sourcePos.y + sourceNode.height / 2;
+            const tx = targetPos.x;
+            const ty = targetPos.y + targetNode.height / 2;
 
             const curvature = Math.max(0.1, Math.min(0.9, style.edgeCurvature));
-            const dx = tx - sx;
-            const cx1 = sx + dx * curvature;
-            const cx2 = tx - dx * curvature;
-            return `M${sx},${sy} C${cx1},${sy} ${cx2},${ty} ${tx},${ty}`;
+            if (orientation === "horizontal") {
+                const dx = tx - sx;
+                const cx1 = sx + dx * curvature;
+                const cx2 = tx - dx * curvature;
+                return `M${sx},${sy} C${cx1},${sy} ${cx2},${ty} ${tx},${ty}`;
+            }
+
+            const dy = ty - sy;
+            const cy1 = sy + dy * curvature;
+            const cy2 = ty - dy * curvature;
+            return `M${sx},${sy} C${sx},${cy1} ${tx},${cy2} ${tx},${ty}`;
         },
-        [HEADER_WIDTH, laneLayout, style.edgeCurvature],
+        [getNodeLayoutPosition, style.edgeCurvature, orientation],
     );
 
     // Get node shape (SVG element based on type)
@@ -381,10 +460,14 @@ export function SwimlaneCanvas({
             const pt = pointerToGraphPoint(event);
             const dx = pt.x - dragState.startX;
             const dy = pt.y - dragState.startY;
+            const flowDelta = (orientation === "horizontal" ? dx : dy) / Math.max(flowScale, 0.001);
+            const laneDelta = (orientation === "horizontal" ? dy : dx) / Math.max(laneScale, 0.001);
+            const nextX = dragState.initialX + flowDelta;
+            const nextY = dragState.initialY + laneDelta;
             handleNodePositionUpdate(
                 dragState.nodeId,
-                Math.max(0, dragState.initialX + dx),
-                Math.max(0, dragState.initialY + dy),
+                Math.max(0, nextX),
+                Math.max(0, nextY),
             );
         }
     };
@@ -436,42 +519,59 @@ export function SwimlaneCanvas({
                     transform={`translate(${(1 - zoom) * (VIEW_WIDTH / 2) + pan.x}, ${(1 - zoom) * (VIEW_HEIGHT / 2) + pan.y
                         }) scale(${zoom})`}
                 >
+                    <rect x={0} y={0} width={totalWidth} height={totalHeight} fill="transparent" pointerEvents="none" />
                     {/* Lane backgrounds */}
                     {laneLayout.map((entry, idx) => (
                         <g key={entry.lane.id}>
                             {/* Lane background */}
-                            <rect
-                                x={0}
-                                y={entry.y}
-                                width={totalWidth}
-                                height={entry.height}
-                                fill={laneColors.get(entry.lane.id) ?? "transparent"}
-                                rx={4}
-                            />
+                            {(() => {
+                                const laneRect = orientRect(0, entry.start, flowSpan, entry.size);
+                                return (
+                                    <rect
+                                        x={laneRect.x}
+                                        y={laneRect.y}
+                                        width={laneRect.width}
+                                        height={laneRect.height}
+                                        fill={laneColors.get(entry.lane.id) ?? "transparent"}
+                                        rx={4}
+                                    />
+                                );
+                            })()}
                             {/* Lane separator line */}
                             {idx > 0 && (
-                                <line
-                                    x1={0}
-                                    y1={entry.y}
-                                    x2={totalWidth}
-                                    y2={entry.y}
-                                    stroke={laneSeparatorColor}
-                                    strokeWidth={1}
-                                    strokeDasharray="6 4"
-                                />
+                                (() => {
+                                    const p1 = orientPoint(0, entry.start);
+                                    const p2 = orientPoint(flowSpan, entry.start);
+                                    return (
+                                        <line
+                                            x1={p1.x}
+                                            y1={p1.y}
+                                            x2={p2.x}
+                                            y2={p2.y}
+                                            stroke={laneSeparatorColor}
+                                            strokeWidth={1}
+                                            strokeDasharray="6 4"
+                                        />
+                                    );
+                                })()
                             )}
                             {/* Lane header */}
-                            <rect
-                                x={0}
-                                y={entry.y}
-                                width={HEADER_WIDTH}
-                                height={entry.height}
-                                fill={laneHeaderBg}
-                                rx={4}
-                            />
+                            {(() => {
+                                const headerRect = orientRect(0, entry.start, HEADER_WIDTH, entry.size);
+                                return (
+                                    <rect
+                                        x={headerRect.x}
+                                        y={headerRect.y}
+                                        width={headerRect.width}
+                                        height={headerRect.height}
+                                        fill={laneHeaderBg}
+                                        rx={4}
+                                    />
+                                );
+                            })()}
                             <text
-                                x={HEADER_WIDTH / 2}
-                                y={entry.y + entry.height / 2}
+                                x={orientation === "horizontal" ? HEADER_WIDTH / 2 : entry.start + entry.size / 2}
+                                y={orientation === "horizontal" ? entry.start + entry.size / 2 : HEADER_WIDTH / 2}
                                 textAnchor="middle"
                                 dominantBaseline="middle"
                                 fontSize={Math.max(13, style.labelFontSize + 2)}
@@ -500,16 +600,12 @@ export function SwimlaneCanvas({
                                 : style.edgeOpacity;
 
                         // Edge label midpoint
-                        const sx = HEADER_WIDTH + sourceNode.x + sourceNode.width;
-                        const sy = (() => {
-                            const le = laneLayout.find((l) => l.lane.id === sourceNode.laneId);
-                            return (le?.y ?? 0) + sourceNode.y + sourceNode.height / 2;
-                        })();
-                        const tx = HEADER_WIDTH + targetNode.x;
-                        const ty = (() => {
-                            const le = laneLayout.find((l) => l.lane.id === targetNode.laneId);
-                            return (le?.y ?? 0) + targetNode.y + targetNode.height / 2;
-                        })();
+                        const sourcePos = getNodeLayoutPosition(sourceNode);
+                        const targetPos = getNodeLayoutPosition(targetNode);
+                        const sx = sourcePos.x + sourceNode.width;
+                        const sy = sourcePos.y + sourceNode.height / 2;
+                        const tx = targetPos.x;
+                        const ty = targetPos.y + targetNode.height / 2;
                         const midX = (sx + tx) / 2;
                         const midY = (sy + ty) / 2;
 
@@ -567,11 +663,10 @@ export function SwimlaneCanvas({
 
                     {/* Nodes */}
                     {graph.nodes.map((node) => {
-                        const laneEntry = laneLayout.find((l) => l.lane.id === node.laneId);
-                        if (!laneEntry) return null;
-
-                        const nodeX = HEADER_WIDTH + node.x;
-                        const nodeY = laneEntry.y + node.y;
+                        const nodePos = getNodeLayoutPosition(node);
+                        const laneLabel = graph.lanes.find((lane) => lane.id === node.laneId)?.label ?? node.laneId;
+                        const nodeX = nodePos.x;
+                        const nodeY = nodePos.y;
                         const isSelected = selectedNodeId === node.id;
                         const isHovered = hoveredNodeId === node.id;
                         const isDimmed = hoverContext && !hoverContext.highlightedNodes.has(node.id);
@@ -635,7 +730,7 @@ export function SwimlaneCanvas({
                                     }}
                                     onMouseEnter={() => {
                                         setHoveredNodeId(node.id);
-                                        setHoverText(`${node.label} (${node.type}) — ${laneEntry.lane.label}`);
+                                        setHoverText(`${node.label} (${node.type}) - ${laneLabel}`);
                                     }}
                                     onMouseLeave={() => {
                                         setHoveredNodeId(null);

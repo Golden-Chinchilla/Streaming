@@ -36,11 +36,32 @@ export function SwimlaneStylePanel({
                             key={t}
                             onClick={() => updateStyle({ theme: t })}
                             className={`rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-all ${style.theme === t
-                                ? "bg-primary text-white shadow-sm"
+                                ? "bg-primary text-on-primary shadow-sm"
                                 : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"
                                 }`}
                         >
                             {t}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className={sectionClass}>
+                <label className={labelClass}>Lane Orientation</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                    {([
+                        { value: "horizontal", label: "Horizontal Lanes" },
+                        { value: "vertical", label: "Vertical Lanes" },
+                    ] as const).map((option) => (
+                        <button
+                            key={option.value}
+                            onClick={() => updateStyle({ orientation: option.value })}
+                            className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-all ${((style.orientation ?? "horizontal") === option.value)
+                                ? "bg-primary text-on-primary shadow-sm"
+                                : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"
+                                }`}
+                        >
+                            {option.label}
                         </button>
                     ))}
                 </div>
@@ -170,7 +191,7 @@ export function SwimlaneStylePanel({
                             key={p}
                             onClick={() => updateStyle({ palette: p })}
                             className={`rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-all ${style.palette === p
-                                ? "bg-primary text-white shadow-sm"
+                                ? "bg-primary text-on-primary shadow-sm"
                                 : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"
                                 }`}
                         >

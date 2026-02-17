@@ -72,6 +72,8 @@ const PREVIEWS: Record<string, React.ReactNode> = {
     swimlane: <SwimlanePreview />,
 };
 
+const nowTimestamp = () => Date.now();
+
 /* ------------------------------------------------------------------ */
 /*  Main Dashboard Component                                          */
 /* ------------------------------------------------------------------ */
@@ -102,7 +104,7 @@ export function Dashboard() {
         const plugin = getDiagramPlugin(type);
         if (!plugin) return;
 
-        const now = Date.now();
+        const now = nowTimestamp();
         const newDoc: BaseDocument = {
             id: crypto.randomUUID(),
             title: `Untitled ${plugin.displayName}`,
@@ -172,7 +174,7 @@ export function Dashboard() {
                 </div>
             </header>
 
-            <main className="max-w-[1600px] mx-auto p-6 space-y-12">
+            <main className="max-w-400 mx-auto p-6 space-y-12">
 
                 {/* 1. Template Gallery */}
                 <section>

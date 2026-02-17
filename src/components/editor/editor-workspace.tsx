@@ -754,6 +754,10 @@ export function EditorWorkspace({ docId }: Props) {
     redo,
     selectedLinkIndex,
     selectedNodeIds.length,
+    clearNodePositions,
+    clearSelectedLinkStyle,
+    clearSelectedNodeStyles,
+    clearSelection,
     setNodePositions,
     setSelectedLinkIndex,
     setSelectedNodeIds,
@@ -1503,30 +1507,6 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
-  const exportAll = async () => {
-    const jobs: Promise<void>[] = [];
-
-    if (exportAllFormats.svg) {
-      const baseName =
-        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-svg` : resolvedExportBaseName;
-      exportSvg(baseName);
-    }
-    if (exportAllFormats.html) {
-      const baseName =
-        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-html` : resolvedExportBaseName;
-      exportHtml(baseName);
-    }
-    if (exportAllFormats.png) {
-      const baseName =
-        exportAllNamingMode === "suffix" ? `${resolvedExportBaseName}-png` : resolvedExportBaseName;
-      jobs.push(exportPng(baseName));
-    }
-
-    if (jobs.length > 0) {
-      await Promise.all(jobs);
-    }
-  };
-
   const applyRawInputToEditor = (text: string) => {
     const candidate = text.trim();
     if (!candidate) {
@@ -1615,26 +1595,6 @@ export function EditorWorkspace({ docId }: Props) {
     } catch (error) {
       pushCanvasActionIssue("error", "Import failed", error instanceof Error ? error.message : "Failed to parse dropped file");
     }
-  };
-
-  const createNewDocument = async () => {
-    const { defaultSankeyData } = await import("@/plugins/sankey");
-    const newDoc: BaseDocument = {
-      id: crypto.randomUUID(),
-      title: "Untitled Diagram",
-      diagramType: "sankey",
-      folderId: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      data: {
-        ...defaultSankeyData,
-        style: { ...defaultSankeyData.style, theme: appPreferences.defaultTheme }
-      } as Record<string, unknown>
-    };
-    initialize(newDoc);
-    await upsertDocument(newDoc);
-    await setCurrentDocumentId(newDoc.id);
-    router.replace(`/editor?doc=${encodeURIComponent(newDoc.id)}`);
   };
 
   const saveAsCopy = async () => {
@@ -1781,7 +1741,7 @@ export function EditorWorkspace({ docId }: Props) {
         onDelete={handleDeleteFromTab}
       />
 
-      <header className="h-[52px] border-b border-border bg-surface px-4 flex items-center justify-between gap-4">
+      <header className="h-13 border-b border-border bg-surface px-4 flex items-center justify-between gap-4">
         {/* Left: Title & Menus */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <button onClick={() => router.push("/")} className="p-1.5 rounded-lg hover:bg-surface-container-high transition-colors text-muted hover:text-foreground">
@@ -1791,7 +1751,7 @@ export function EditorWorkspace({ docId }: Props) {
           <input
             value={currentDoc.title || ""}
             onChange={(e) => setTitle(e.target.value)}
-            className="bg-transparent font-medium text-sm px-2 py-1 rounded hover:bg-surface-container focus:bg-surface-container focus:outline-none focus:ring-1 focus:ring-primary/30 w-[200px] transition-all"
+            className="bg-transparent font-medium text-sm px-2 py-1 rounded hover:bg-surface-container focus:bg-surface-container focus:outline-none focus:ring-1 focus:ring-primary/30 w-50 transition-all"
             placeholder="Untitled Diagram"
           />
 
@@ -1854,7 +1814,7 @@ export function EditorWorkspace({ docId }: Props) {
                 Display
               </button>
               {showDisplayMenu && (
-                <div className={`${headerMenuClass} w-[280px] max-h-[80vh] overflow-y-auto thin-scrollbar`}>
+                <div className={`${headerMenuClass} w-70 max-h-[80vh] overflow-y-auto thin-scrollbar`}>
                   <div className="mb-2 flex gap-0.5 p-1 bg-surface-container rounded-lg">
                     <button
                       onClick={() => setDisplayMenuTab("view")}
@@ -1932,7 +1892,7 @@ export function EditorWorkspace({ docId }: Props) {
               Export
             </button>
             {showExportMenu && (
-              <div className={`${headerMenuClass} w-[280px] right-0 left-auto`}>
+              <div className={`${headerMenuClass} w-70 right-0 left-auto`}>
                 <div className="px-2 py-1.5">
                   <span className="text-xs font-semibold text-foreground/80 block mb-2">Export Settings</span>
 
@@ -2033,7 +1993,7 @@ export function EditorWorkspace({ docId }: Props) {
               <GripVertical className="h-4 w-4" />
             </button>
             {showWorkspaceQuickMenu && (
-              <div className={`pointer-events-auto min-w-[170px] ${headerMenuClass}`}>
+              <div className={`pointer-events-auto min-w-42.5 ${headerMenuClass}`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -2287,8 +2247,6 @@ export function EditorWorkspace({ docId }: Props) {
     </div>
   );
 }
-
-
 
 
 

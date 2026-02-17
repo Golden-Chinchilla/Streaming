@@ -62,7 +62,7 @@ export function EditorTabs({
                         <div
                             key={doc.id}
                             className={`
-                group relative flex items-center gap-2 px-3 py-1.5 min-w-[120px] max-w-[200px]
+                group relative flex items-center gap-2 px-3 py-1.5 min-w-30 max-w-50
                 border-r border-border cursor-pointer transition-colors text-xs font-medium
                 ${isActive
                                     ? "bg-surface text-foreground shadow-sm z-10"
@@ -109,7 +109,7 @@ export function EditorTabs({
             {/* Context Menu */}
             {contextMenu && (
                 <div
-                    className="fixed z-50 min-w-[160px] bg-surface-container-high border border-border rounded-lg shadow-lg py-1"
+                    className="fixed z-50 min-w-40 bg-surface-container-high border border-border rounded-lg shadow-lg py-1"
                     style={{ top: contextMenu.y, left: contextMenu.x }}
                     onClick={(e) => e.stopPropagation()}
                 >

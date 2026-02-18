@@ -16,6 +16,7 @@ export type EditorMarker = {
   message: string;
   line: number;
   column: number;
+  severity?: number;
 };
 
 type Props = {
@@ -24,6 +25,7 @@ type Props = {
   theme: "light" | "dark";
   onChange: (value: string) => void;
   marker?: EditorMarker | null;
+  className?: string;
 };
 
 function ensureEditorLanguageAndTheme(monaco: typeof import("monaco-editor")) {
@@ -58,9 +60,9 @@ function ensureEditorLanguageAndTheme(monaco: typeof import("monaco-editor")) {
         { token: "identifier", foreground: "e2e8f0" },
       ],
       colors: {
-        "editor.background": "#0f172a",
+        "editor.background": "#00000000",
         "editor.foreground": "#e2e8f0",
-        "editor.lineHighlightBackground": "#1e293b99",
+        "editor.lineHighlightBackground": "#ffffff08",
         "editorCursor.foreground": "#f1f5f9",
         "editor.selectionBackground": "#38bdf84d",
         "editor.inactiveSelectionBackground": "#33415588",
@@ -92,7 +94,7 @@ function ensureEditorLanguageAndTheme(monaco: typeof import("monaco-editor")) {
   }
 }
 
-export function SankeyMonacoEditor({ value, format, theme, onChange, marker }: Props) {
+export function SankeyMonacoEditor({ value, format, theme, onChange, marker, className }: Props) {
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
 
@@ -112,7 +114,7 @@ export function SankeyMonacoEditor({ value, format, theme, onChange, marker }: P
         endLineNumber: marker.line,
         endColumn: marker.column + 1,
         message: marker.message,
-        severity: monacoRef.current.MarkerSeverity.Error,
+        severity: marker.severity ?? monacoRef.current.MarkerSeverity.Error,
       },
     ]);
   }, [marker]);
@@ -123,6 +125,7 @@ export function SankeyMonacoEditor({ value, format, theme, onChange, marker }: P
 
   return (
     <MonacoEditor
+      className={className}
       height="100%"
       language={format === "csv" ? CSV_LANGUAGE_ID : "json"}
       value={value}
@@ -147,6 +150,7 @@ export function SankeyMonacoEditor({ value, format, theme, onChange, marker }: P
         tabSize: 2,
         cursorSmoothCaretAnimation: "on",
         padding: { top: 10, bottom: 10 },
+        scrollBeyondLastLine: false,
       }}
     />
   );

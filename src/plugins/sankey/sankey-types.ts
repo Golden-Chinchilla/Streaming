@@ -56,3 +56,9 @@ export type EditableLink = {
     target: string;
     value: number;
 };
+
+export type EditableNode = {
+    id: string;
+    nextId: string;
+    originalId?: string;
+};

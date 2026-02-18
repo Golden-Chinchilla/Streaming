@@ -44,6 +44,16 @@ type JsonSourcePointerEntry = {
     valueEnd?: JsonSourcePosition;
 };
 
+function normalizeParseText(text: unknown): string {
+    if (typeof text === "string") return text;
+    if (text == null) return "";
+    return String(text);
+}
+
+function normalizeParseFormat(format: unknown): DataFormat {
+    return format === "csv" ? "csv" : "json";
+}
+
 function lineColumnFromIndex(text: string, index: number) {
     const safeIndex = Math.max(0, Math.min(text.length, index));
     const leading = text.slice(0, safeIndex);
@@ -447,7 +457,7 @@ function parseFlowDsl(text: string): SankeyParseResult | null {
     }
 }
 
-export function parseSankeyText(text: string, format: DataFormat): SankeyGraph {
+export function parseSankeyText(text: unknown, format: unknown): SankeyGraph {
     const result = parseSankeyTextDetailed(text, format);
     if (!result.ok) {
         throw new Error(result.issue.message);
@@ -455,11 +465,13 @@ export function parseSankeyText(text: string, format: DataFormat): SankeyGraph {
     return result.graph;
 }
 
-export function parseSankeyTextDetailed(text: string, format: DataFormat): SankeyParseResult {
-    const primary = format === "csv" ? parseCsv(text) : parseJson(text);
+export function parseSankeyTextDetailed(text: unknown, format: unknown): SankeyParseResult {
+    const normalizedText = normalizeParseText(text);
+    const normalizedFormat = normalizeParseFormat(format);
+    const primary = normalizedFormat === "csv" ? parseCsv(normalizedText) : parseJson(normalizedText);
     if (primary.ok) return primary;
 
-    const dslFallback = parseFlowDsl(text);
+    const dslFallback = parseFlowDsl(normalizedText);
     if (dslFallback) {
         return dslFallback;
     }

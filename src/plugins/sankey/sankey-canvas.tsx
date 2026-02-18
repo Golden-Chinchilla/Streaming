@@ -5,6 +5,7 @@ import { SankeyGraph as D3SankeyGraph, sankey, SankeyLink, SankeyNode, sankeyCen
 import { CanvasProps } from "@/lib/diagram-registry";
 import { SankeyData } from "./sankey-types";
 import { parseSankeyTextDetailed } from "./sankey-parse";
+import { defaultSankeyStyle } from "./sankey-defaults";
 import { linkStyleKey } from "@/lib/utils";
 import { DARK_LABEL_COLOR, LIGHT_LABEL_COLOR } from "@/lib/theme";
 
@@ -51,6 +52,10 @@ type DisplayLink = {
   y1: number;
 };
 const DUMMY_NODE_PREFIX = "__stage_dummy__";
+const EMPTY_NODE_POSITIONS: SankeyData["nodePositions"] = {};
+const EMPTY_NODE_STYLES: SankeyData["nodeStyles"] = {};
+const EMPTY_LINK_STYLES: SankeyData["linkStyles"] = {};
+const EMPTY_LAYOUT = { nodes: [], links: [] } as unknown as GraphLayout;
 
 
 
@@ -64,6 +69,13 @@ const SEMANTIC_ROLE_COLORS = {
   intermediate: "var(--flow-1)",
   sink: "var(--flow-5)",
 } as const;
+const DEFAULT_RENDER_HINTS: NonNullable<SankeyInteractionState["renderHints"]> = {
+  showLabels: true,
+  enableLinkHover: true,
+  dragThrottleMs: 0,
+  simplifyLinkCurves: false,
+  lowDetailDuringDrag: false,
+};
 
 
 
@@ -79,6 +91,82 @@ function formatCompactValue(value: number) {
   return value.toLocaleString();
 }
 
+function toFiniteNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function sanitizeRenderHints(rawHints: unknown): NonNullable<SankeyInteractionState["renderHints"]> {
+  if (!rawHints || typeof rawHints !== "object") return { ...DEFAULT_RENDER_HINTS };
+  const hints = rawHints as Partial<NonNullable<SankeyInteractionState["renderHints"]>>;
+  return {
+    showLabels: typeof hints.showLabels === "boolean" ? hints.showLabels : DEFAULT_RENDER_HINTS.showLabels,
+    enableLinkHover: typeof hints.enableLinkHover === "boolean" ? hints.enableLinkHover : DEFAULT_RENDER_HINTS.enableLinkHover,
+    dragThrottleMs: toFiniteNumber(
+      hints.dragThrottleMs,
+      DEFAULT_RENDER_HINTS.dragThrottleMs,
+      0,
+      2_000,
+    ),
+    simplifyLinkCurves:
+      typeof hints.simplifyLinkCurves === "boolean"
+        ? hints.simplifyLinkCurves
+        : DEFAULT_RENDER_HINTS.simplifyLinkCurves,
+    lowDetailDuringDrag:
+      typeof hints.lowDetailDuringDrag === "boolean"
+        ? hints.lowDetailDuringDrag
+        : DEFAULT_RENDER_HINTS.lowDetailDuringDrag,
+  };
+}
+
+function sanitizeSankeyStyle(rawStyle: Partial<SankeyData["style"]>): SankeyData["style"] {
+  const merged = { ...defaultSankeyStyle, ...rawStyle };
+  return {
+    ...merged,
+    nodeWidth: toFiniteNumber(merged.nodeWidth, defaultSankeyStyle.nodeWidth, 4, 320),
+    nodePadding: toFiniteNumber(merged.nodePadding, defaultSankeyStyle.nodePadding, 0, 240),
+    nodeRadius: toFiniteNumber(merged.nodeRadius, defaultSankeyStyle.nodeRadius, 0, 40),
+    linkOpacity: toFiniteNumber(merged.linkOpacity, defaultSankeyStyle.linkOpacity, 0.02, 1),
+    curvature: toFiniteNumber(merged.curvature, defaultSankeyStyle.curvature, 0, 1),
+    labelFontSize: toFiniteNumber(merged.labelFontSize, defaultSankeyStyle.labelFontSize, 8, 48),
+    labelThreshold: toFiniteNumber(merged.labelThreshold ?? 0, 0, 0, Number.MAX_SAFE_INTEGER),
+    showLabels: typeof merged.showLabels === "boolean" ? merged.showLabels : defaultSankeyStyle.showLabels,
+    labelPosition: merged.labelPosition === "inside" || merged.labelPosition === "outside"
+      ? merged.labelPosition
+      : defaultSankeyStyle.labelPosition,
+    labelFontFamily:
+      merged.labelFontFamily === "Roboto" || merged.labelFontFamily === "Google Sans" || merged.labelFontFamily === "System Sans"
+        ? merged.labelFontFamily
+        : defaultSankeyStyle.labelFontFamily,
+    theme: merged.theme === "light" || merged.theme === "dark" ? merged.theme : defaultSankeyStyle.theme,
+    palette: merged.palette === "classic" || merged.palette === "ocean" || merged.palette === "sunset"
+      ? merged.palette
+      : defaultSankeyStyle.palette,
+    colorStrategy: merged.colorStrategy === "palette" || merged.colorStrategy === "semantic"
+      ? merged.colorStrategy
+      : defaultSankeyStyle.colorStrategy,
+    labelStyle: merged.labelStyle === "plain" || merged.labelStyle === "badge"
+      ? merged.labelStyle
+      : defaultSankeyStyle.labelStyle,
+    linkRender: merged.linkRender === "flat" || merged.linkRender === "soft"
+      ? merged.linkRender
+      : defaultSankeyStyle.linkRender,
+    align:
+      merged.align === "justify" || merged.align === "left" || merged.align === "right" || merged.align === "center"
+        ? merged.align
+        : defaultSankeyStyle.align,
+    linkBlendMode: merged.linkBlendMode === "multiply" || merged.linkBlendMode === "normal"
+      ? merged.linkBlendMode
+      : defaultSankeyStyle.linkBlendMode,
+    labelColor: typeof merged.labelColor === "string" && merged.labelColor.trim().length > 0
+      ? merged.labelColor
+      : defaultSankeyStyle.labelColor,
+    linkGradient: typeof merged.linkGradient === "boolean" ? merged.linkGradient : defaultSankeyStyle.linkGradient,
+    transparent: typeof merged.transparent === "boolean" ? merged.transparent : defaultSankeyStyle.transparent,
+  };
+}
+
 export function SankeyCanvas({
   data,
   width,
@@ -88,7 +176,15 @@ export function SankeyCanvas({
   onSvgReady,
 }: CanvasProps<SankeyData>) {
   // Destructure data
-  const { style, nodePositions, nodeStyles, linkStyles, editorText, format } = data;
+  const rawStyle = (data?.style ?? {}) as Partial<SankeyData["style"]>;
+  const style = sanitizeSankeyStyle(rawStyle);
+  const nodePositions = data?.nodePositions ?? EMPTY_NODE_POSITIONS;
+  const nodeStyles = data?.nodeStyles ?? EMPTY_NODE_STYLES;
+  const linkStyles = data?.linkStyles ?? EMPTY_LINK_STYLES;
+  const editorText = data?.editorText;
+  const format = data?.format;
+  const safeEditorText = typeof editorText === "string" ? editorText : "";
+  const safeFormat = format === "csv" ? "csv" : "json";
 
   // Unpack interaction state
   const {
@@ -107,32 +203,14 @@ export function SankeyCanvas({
     onZoomChange = () => { },
   } = (interactionState || {}) as SankeyInteractionState;
 
-  // Sync theme with system/DOM preference on mount
-  useEffect(() => {
-    // Check if a 'dark' class exists on document.documentElement (Tailwind standard)
-    const isSystemDark = document.documentElement.classList.contains("dark");
-    const currentTheme = style.theme;
-
-    // Only auto-switch if the user hasn't explicitly set a preference (which we can't easily contextualize here without more state),
-    // OR, more aggressively, we just trust the system/app wrapper class implies the desired viewing mode.
-    // To be safe, let's say: if the Current Data Theme is inconsistent with the App Wrapper, update Data Theme.
-    if (isSystemDark && currentTheme === "light") {
-      onDataChange?.({
-        ...data,
-        style: { ...style, theme: "dark", labelColor: DARK_LABEL_COLOR }
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount — intentional: sync theme only on initial render
-
   // Internal Parsing
   const { graph } = useMemo(() => {
-    const result = parseSankeyTextDetailed(editorText, format);
+    const result = parseSankeyTextDetailed(safeEditorText, safeFormat);
     if (result.ok) return { graph: result.graph };
     // TODO: Expose error state needed? For now return empty graph or partial
     // We could fallback to a safe empty graph
     return { graph: { nodes: [], links: [] } };
-  }, [editorText, format]);
+  }, [safeEditorText, safeFormat]);
 
   // Handler adapters
   const onNodePositionChange = (nodeId: string, y: number) => {
@@ -179,11 +257,14 @@ export function SankeyCanvas({
   } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const lastDragEmitAtRef = useRef(0);
-  const colors = palettes[style.palette];
+  const paletteKey = typeof style.palette === "string" && style.palette in palettes ? style.palette : "ocean";
+  const colors = palettes[paletteKey];
   const colorStrategy = style.colorStrategy ?? "palette";
   const labelStyle = style.labelStyle ?? "badge";
   const linkRender = style.linkRender ?? "soft";
-  const isDark = style.theme === "dark";
+  const isDark = typeof document !== "undefined"
+    ? document.documentElement.getAttribute("data-theme") === "dark"
+    : style.theme === "dark";
   const tooltipBg = isDark ? "var(--bg-secondary)" : "var(--text-primary)";
   const labelColor = style.labelColor || (isDark ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR);
   const insideLabelColor = isDark ? "rgba(248,250,252,0.96)" : "rgba(15,23,42,0.92)";
@@ -191,13 +272,7 @@ export function SankeyCanvas({
   const zoomPillClass = isDark
     ? "absolute right-3 top-3 z-10 rounded-full border border-slate-600/60 bg-slate-900/62 px-3 py-1 text-xs font-medium text-slate-200/90 shadow-sm backdrop-blur"
     : "absolute right-3 top-3 z-10 rounded-full border border-slate-300/80 bg-white/86 px-3 py-1 text-xs font-medium text-slate-700 shadow-sm backdrop-blur";
-  const effectiveHints = renderHints ?? {
-    showLabels: true,
-    enableLinkHover: true,
-    dragThrottleMs: 0,
-    simplifyLinkCurves: false,
-    lowDetailDuringDrag: false,
-  };
+  const effectiveHints = sanitizeRenderHints(renderHints);
   const degradedDetail =
     effectiveHints.lowDetailDuringDrag && (Boolean(dragState) || Boolean(panning));
   const canShowLabels = style.showLabels && effectiveHints.showLabels && !degradedDetail;
@@ -469,6 +544,9 @@ export function SankeyCanvas({
   }, [expandedGraph.links, expandedGraph.nodes, nodeRoleMap]);
 
   const layout: GraphLayout = useMemo(() => {
+    if (expandedGraph.nodes.length === 0 || expandedGraph.links.length === 0) {
+      return EMPTY_LAYOUT;
+    }
     const generator = sankey<NodeDatum, LinkDatum>()
       .nodeId((node) => node.id)
       .nodeAlign((node, depthCount) => {
@@ -495,24 +573,29 @@ export function SankeyCanvas({
         [RIGHT, BOTTOM],
       ]);
 
-    const built = generator({
-      nodes: expandedGraph.nodes.map((node) => ({ ...node })),
-      links: expandedGraph.links.map((link) => ({ ...link })),
-    });
+    try {
+      const built = generator({
+        nodes: expandedGraph.nodes.map((node) => ({ ...node })),
+        links: expandedGraph.links.map((link) => ({ ...link })),
+      });
 
-    for (const node of built.nodes) {
-      if (node.id in nodePositions) {
-        const currentTop = node.y0 ?? 0;
-        const currentBottom = node.y1 ?? currentTop;
-        const height = currentBottom - currentTop;
-        const desiredTop = clampNodeTop(nodePositions[node.id], height);
-        node.y0 = desiredTop;
-        node.y1 = desiredTop + height;
+      for (const node of built.nodes) {
+        if (node.id in nodePositions) {
+          const currentTop = node.y0 ?? 0;
+          const currentBottom = node.y1 ?? currentTop;
+          const height = currentBottom - currentTop;
+          const desiredTop = clampNodeTop(nodePositions[node.id], height);
+          node.y0 = desiredTop;
+          node.y1 = desiredTop + height;
+        }
       }
-    }
 
-    generator.update(built);
-    return built;
+      generator.update(built);
+      return built;
+    } catch (error) {
+      console.error("Failed to build Sankey layout", error);
+      return EMPTY_LAYOUT;
+    }
   }, [expandedGraph, layoutOrdering, nodePositions, style.nodePadding, style.nodeWidth, style.align, RIGHT, BOTTOM, clampNodeTop]);
 
   const sourceName = (link: SankeyLink<NodeDatum, LinkDatum>) =>
@@ -891,6 +974,23 @@ export function SankeyCanvas({
     });
   };
 
+  const handleCanvasWheel = useCallback((event: WheelEvent) => {
+    event.preventDefault();
+    setZoom((currentZoom) => {
+      const next = currentZoom + (event.deltaY > 0 ? -0.05 : 0.05);
+      return Math.max(0.5, Math.min(1.8, next));
+    });
+  }, []);
+
+  useEffect(() => {
+    const svgElement = svgRef.current;
+    if (!svgElement) return;
+    svgElement.addEventListener("wheel", handleCanvasWheel, { passive: false });
+    return () => {
+      svgElement.removeEventListener("wheel", handleCanvasWheel);
+    };
+  }, [handleCanvasWheel]);
+
   return (
     <div
       className={`relative h-full w-full overflow-hidden rounded-2xl border ${cursorClass} ${isDark ? "border-slate-700 bg-slate-950/70" : "border-slate-300 bg-white/90"}`}
@@ -904,13 +1004,6 @@ export function SankeyCanvas({
         id="streaming-svg"
         className={`h-full w-full ${cursorClass}`}
         viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
-        onWheel={(event) => {
-          event.preventDefault();
-          setZoom((currentZoom) => {
-            const next = currentZoom + (event.deltaY > 0 ? -0.05 : 0.05);
-            return Math.max(0.5, Math.min(1.8, next));
-          });
-        }}
         onMouseDown={onCanvasMouseDown}
         onMouseMove={onCanvasMouseMove}
         onMouseUp={onCanvasMouseUp}
@@ -1296,8 +1389,11 @@ export function SankeyCanvas({
 
       {hoverText && canHoverLinks && (
         <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-slate-600/70 bg-slate-900/95 px-3 py-2 text-xs text-white shadow-lg"
-          style={{ backgroundColor: tooltipBg }}
+          className="absolute left-1/2 -translate-x-1/2 rounded-lg border border-slate-600/70 bg-slate-900/95 px-3 py-2 text-xs text-white shadow-lg"
+          style={{
+            backgroundColor: tooltipBg,
+            bottom: "calc(var(--editor-bottom-safe-area, 0px) + 0.75rem)",
+          }}
         >
           {hoverText}
         </div>

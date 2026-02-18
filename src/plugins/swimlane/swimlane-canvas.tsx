@@ -493,6 +493,20 @@ export function SwimlaneCanvas({
     const zoomPillClass = `absolute top-3 right-3 z-10 rounded-full px-2.5 py-1 text-[10px] font-medium shadow-md backdrop-blur-md
         ${isDark ? "bg-slate-800/80 text-slate-300 border border-slate-600/40" : "bg-white/80 text-slate-600 border border-slate-200/60"}`;
 
+    const handleCanvasWheel = useCallback((event: WheelEvent) => {
+        event.preventDefault();
+        setZoom((z) => Math.max(0.3, Math.min(2.5, z + (event.deltaY > 0 ? -0.05 : 0.05))));
+    }, []);
+
+    useEffect(() => {
+        const svgElement = svgRef.current;
+        if (!svgElement) return;
+        svgElement.addEventListener("wheel", handleCanvasWheel, { passive: false });
+        return () => {
+            svgElement.removeEventListener("wheel", handleCanvasWheel);
+        };
+    }, [handleCanvasWheel]);
+
     return (
         <div
             className={`relative h-full w-full overflow-hidden rounded-2xl border ${cursorClass} ${isDark ? "border-slate-700 bg-slate-950/70" : "border-slate-300 bg-white/90"
@@ -506,10 +520,6 @@ export function SwimlaneCanvas({
                 id="streaming-svg"
                 className={`h-full w-full ${cursorClass}`}
                 viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
-                onWheel={(event) => {
-                    event.preventDefault();
-                    setZoom((z) => Math.max(0.3, Math.min(2.5, z + (event.deltaY > 0 ? -0.05 : 0.05))));
-                }}
                 onMouseDown={onCanvasMouseDown}
                 onMouseMove={onCanvasMouseMove}
                 onMouseUp={onCanvasMouseUp}
@@ -746,8 +756,11 @@ export function SwimlaneCanvas({
             {/* Tooltip */}
             {hoverText && (
                 <div
-                    className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-slate-600/70 bg-slate-900/95 px-3 py-2 text-xs text-white shadow-lg"
-                    style={{ backgroundColor: tooltipBg }}
+                    className="absolute left-1/2 -translate-x-1/2 rounded-lg border border-slate-600/70 bg-slate-900/95 px-3 py-2 text-xs text-white shadow-lg"
+                    style={{
+                        backgroundColor: tooltipBg,
+                        bottom: "calc(var(--editor-bottom-safe-area, 0px) + 0.75rem)",
+                    }}
                 >
                     {hoverText}
                 </div>

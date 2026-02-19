@@ -8,13 +8,18 @@ import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
+  Braces,
+  Table2,
+  Waypoints,
   Moon,
   Play,
   Redo2,
   Sun,
   Undo2,
   Share2,
-  GalleryVerticalEnd
+  GalleryVerticalEnd,
+  Database
 } from "lucide-react";
 import logoLight from "@/assets/logo/logo-light.svg";
 import emptyEditorArt from "@/assets/svg/Exploring-cuate.svg";
@@ -29,14 +34,27 @@ import {
   serializeLinksByFormat,
 } from "@/plugins/sankey/sankey-serialize";
 import {
-  parseSankeyText as parseSankeyFlow,
+  parseSankeyTextDetailed,
 } from "@/plugins/sankey/sankey-parse";
+import {
+  linksToCanonicalCsv,
+  linksToCanonicalJson,
+  parseCsvPreview,
+  parseJsonPreview,
+  parseXlsxPreview,
+  rowsToCanonicalLinks,
+} from "@/lib/source-import";
 
-import { getDiagramPlugin } from "@/lib/diagram-registry";
+import {
+  EditorInputMode,
+  getAllDiagramPlugins,
+  getDiagramPlugin,
+} from "@/lib/diagram-registry";
 import {
   BaseDocument,
   DataFormat,
   AppPreferences,
+  DiagramType,
 } from "@/lib/types";
 import { AppIssue } from "@/lib/issues";
 import {
@@ -58,6 +76,7 @@ import {
 } from "@/components/editor/flow-edit-modal";
 import { IssueCenter } from "@/components/common/issue-center";
 import { useAppDialog } from "@/components/common/app-dialog";
+import { DiagramTypePickerDialog } from "@/components/common/diagram-type-picker-dialog";
 
 // -----------------------------------------------------------------------------
 // Utilities
@@ -87,17 +106,23 @@ type Props = {
   docId?: string;
 };
 
+type DiagramPickerMode = "create" | "switch";
+
 const EXPORT_SETTINGS_STORAGE_KEY = "streaming-export-settings-v1";
 const LEFT_WORKBENCH_MODE_STORAGE_KEY = "streaming-editor-left-workbench-mode-v1";
+const LEFT_WORKBENCH_WIDTH_STORAGE_KEY = "streaming-editor-left-workbench-width-v1";
 const CANVAS_BASE_WIDTH = 1200;
 const CANVAS_BASE_HEIGHT = 700;
 const EDITOR_HEADER_HEIGHT = 72;
 const EDITOR_LEFT_COMPACT_WIDTH = 320;
 const EDITOR_LEFT_EXPANDED_WIDTH = 384;
-const EDITOR_RIGHT_PANEL_WIDTH = 352;
+const EDITOR_LEFT_MIN_WIDTH = 280;
+const EDITOR_LEFT_MAX_WIDTH = 560;
+const EDITOR_RIGHT_PANEL_WIDTH = 384;
 const EDITOR_BOTTOM_SAFE_AREA = 88;
 
 type LeftWorkbenchMode = "collapsed" | "compact" | "expanded";
+type InputMode = EditorInputMode;
 type ActiveEditorModal =
   | { type: "link"; index: number }
   | { type: "node"; id: string };
@@ -126,6 +151,7 @@ const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultPerformanceMode: "auto",
   defaultExportTransparentBg: false,
   defaultExportFileTemplate: "{title}-{date}",
+  defaultDiagramType: null,
 };
 
 function loadExportSettingsFromStorage(): ExportSettings | null {
@@ -156,6 +182,23 @@ function loadLeftWorkbenchModeFromStorage(): LeftWorkbenchMode | null {
   }
 }
 
+function clampLeftWorkbenchWidth(width: number) {
+  return Math.max(EDITOR_LEFT_MIN_WIDTH, Math.min(EDITOR_LEFT_MAX_WIDTH, width));
+}
+
+function loadLeftWorkbenchWidthFromStorage(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(LEFT_WORKBENCH_WIDTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    return clampLeftWorkbenchWidth(parsed);
+  } catch {
+    return null;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Component: EditorWorkspace
 // -----------------------------------------------------------------------------
@@ -170,10 +213,11 @@ export function EditorWorkspace({ docId }: Props) {
   } = useEditorStore();
 
   const importConfigJsonInputRef = useRef<HTMLInputElement>(null);
+  const importDataInputRef = useRef<HTMLInputElement>(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const fileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const fileMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const displayMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const displayPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const displayPanelRef = useRef<HTMLDivElement>(null);
   const displayPanelCloseRef = useRef<HTMLButtonElement>(null);
   const titleSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -195,7 +239,7 @@ export function EditorWorkspace({ docId }: Props) {
   });
 
   // Derived state
-  const docData = (currentDoc.data as Record<string, unknown>) || {};
+  const docData = useMemo(() => (currentDoc.data as Record<string, unknown>) || {}, [currentDoc.data]);
   const docEditorText = (docData.editorText as string) || "";
   const docFormat = (docData.format as DataFormat) || "json";
 
@@ -203,14 +247,21 @@ export function EditorWorkspace({ docId }: Props) {
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [editorIssues, setEditorIssues] = useState<AppIssue[]>([]);
   const [editorText, setEditorTextState] = useState(docEditorText);
+  const [inputMode, setInputMode] = useState<InputMode>(docFormat);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
 
   // Layout & Workbench State
   const [leftWorkbenchMode, setLeftWorkbenchMode] = useState<LeftWorkbenchMode>("compact");
+  const [leftWorkbenchWidth, setLeftWorkbenchWidth] = useState(EDITOR_LEFT_EXPANDED_WIDTH);
 
   // Menus
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
+  const [showDiagramTypePicker, setShowDiagramTypePicker] = useState(false);
+  const [diagramPickerMode, setDiagramPickerMode] = useState<DiagramPickerMode>("create");
+  const [rememberDiagramTypeDefault, setRememberDiagramTypeDefault] = useState(false);
+  const [isCreatingDiagram, setIsCreatingDiagram] = useState(false);
+  const [defaultDiagramType, setDefaultDiagramType] = useState<DiagramType | null>(null);
   const [appTheme, setAppTheme] = useState<"light" | "dark">("dark");
   const [viewportWidth, setViewportWidth] = useState(
     typeof window === "undefined" ? 1440 : window.innerWidth,
@@ -257,15 +308,25 @@ export function EditorWorkspace({ docId }: Props) {
   const plugin = useMemo(() => {
     return getDiagramPlugin(currentDoc.diagramType);
   }, [currentDoc.diagramType]);
+  const availableDiagramPlugins = useMemo(() => getAllDiagramPlugins(), []);
+  const defaultDiagramLabel = useMemo(() => {
+    if (!defaultDiagramType) return null;
+    return getDiagramPlugin(defaultDiagramType)?.displayName ?? null;
+  }, [defaultDiagramType]);
+  const currentDiagramLabel = plugin?.displayName ?? currentDoc.diagramType ?? "Diagram";
+  const CurrentDiagramIcon = plugin?.icon;
+  const supportedInputModes = useMemo<InputMode[]>(() => {
+    const declared = plugin?.inputModes ?? ["json"];
+    const deduped = Array.from(new Set(declared.filter((mode): mode is InputMode => mode === "json" || mode === "csv" || mode === "dsl")));
+    return deduped.length > 0 ? deduped : ["json"];
+  }, [plugin]);
 
   const hasOpenTabs = openDocuments.length > 0;
   const leftWorkbenchVisible = leftWorkbenchMode !== "collapsed";
   const isNarrowLayout = viewportWidth < 1280;
-  const leftWorkbenchDesktopWidth = leftWorkbenchMode === "expanded"
-    ? EDITOR_LEFT_EXPANDED_WIDTH
-    : leftWorkbenchMode === "compact"
-      ? EDITOR_LEFT_COMPACT_WIDTH
-      : 0;
+  const leftWorkbenchDesktopWidth = leftWorkbenchVisible
+    ? clampLeftWorkbenchWidth(leftWorkbenchWidth)
+    : 0;
   const rightWorkbenchVisible = Boolean(plugin?.StylePanel && showDisplayMenu);
   const rightWorkbenchDesktopWidth = rightWorkbenchVisible ? EDITOR_RIGHT_PANEL_WIDTH : 0;
   const leftColumnWidth = isNarrowLayout ? 0 : leftWorkbenchDesktopWidth;
@@ -312,12 +373,20 @@ export function EditorWorkspace({ docId }: Props) {
   // ---------------------------------------------------------------------------
   const parseResult = useMemo(() => {
     if (!docEditorText) return { nodes: [], links: [] };
-    try {
-      const graph = parseSankeyFlow(docEditorText, docFormat);
-      return graph;
-    } catch {
-      return { nodes: [], links: [] };
-    }
+    const result = parseSankeyTextDetailed(docEditorText, docFormat);
+    return result.ok ? result.graph : { nodes: [], links: [] };
+  }, [docEditorText, docFormat]);
+
+  const editorMarker = useMemo(() => {
+    if (!docEditorText.trim()) return null;
+    const result = parseSankeyTextDetailed(docEditorText, docFormat);
+    return result.ok
+      ? null
+      : {
+          message: result.issue.message,
+          line: result.issue.line,
+          column: result.issue.column,
+        };
   }, [docEditorText, docFormat]);
 
   const graph = useMemo(() => ({ nodes: parseResult.nodes, links: parseResult.links }), [parseResult.links, parseResult.nodes]);
@@ -373,6 +442,7 @@ export function EditorWorkspace({ docId }: Props) {
       document.documentElement.setAttribute("data-theme", merged.defaultTheme);
       setAppTheme(merged.defaultTheme);
       setExportTransparentBg(merged.defaultExportTransparentBg ?? false);
+      setDefaultDiagramType(merged.defaultDiagramType ?? null);
     });
 
     Promise.resolve().then(() => {
@@ -383,10 +453,17 @@ export function EditorWorkspace({ docId }: Props) {
       if (savedExport?.padding) setExportPadding(savedExport.padding);
 
       const savedLayout = loadLeftWorkbenchModeFromStorage();
+      const savedWorkbenchWidth = loadLeftWorkbenchWidthFromStorage();
+      if (savedWorkbenchWidth) {
+        setLeftWorkbenchWidth(savedWorkbenchWidth);
+      }
       if (savedLayout) {
         setLeftWorkbenchMode(savedLayout);
       } else {
         setLeftWorkbenchMode(defaultLeftWorkbenchModeByWidth(window.innerWidth));
+        setLeftWorkbenchWidth(
+          window.innerWidth < 1280 ? EDITOR_LEFT_COMPACT_WIDTH : EDITOR_LEFT_EXPANDED_WIDTH,
+        );
       }
     });
 
@@ -395,7 +472,10 @@ export function EditorWorkspace({ docId }: Props) {
       // Load open tabs
       const openIds = await loadOpenDocumentIds();
       const allDocs = await loadAllDocuments();
-      const opened = allDocs.filter(d => openIds.includes(d.id));
+      const docById = new Map(allDocs.map((doc) => [doc.id, doc]));
+      const opened = openIds
+        .map((id) => docById.get(id))
+        .filter((doc): doc is BaseDocument => Boolean(doc));
       setOpenDocuments(dedupeDocumentsById(opened));
 
       // Load active doc
@@ -406,6 +486,10 @@ export function EditorWorkspace({ docId }: Props) {
           initialize(loaded);
           storeInitialize(loaded); // Sync store
           setEditorTextState((loaded.data.editorText as string) || "");
+          const loadedFormat = loaded.data.format;
+          if (loadedFormat === "json" || loadedFormat === "csv") {
+            setInputMode(loadedFormat);
+          }
 
           // Add to tabs if not present
           if (!openIds.includes(loaded.id)) {
@@ -427,6 +511,11 @@ export function EditorWorkspace({ docId }: Props) {
     void bootstrap();
     return () => window.cancelAnimationFrame(rafId);
   }, [docId, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (supportedInputModes.includes(inputMode)) return;
+    setInputMode(supportedInputModes[0] ?? "json");
+  }, [supportedInputModes, inputMode]);
 
   useEffect(() => {
     const onResizeWindow = () => {
@@ -452,6 +541,18 @@ export function EditorWorkspace({ docId }: Props) {
       // Ignore storage write failures; layout still works in-memory.
     }
   }, [leftWorkbenchMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(
+        LEFT_WORKBENCH_WIDTH_STORAGE_KEY,
+        String(clampLeftWorkbenchWidth(leftWorkbenchWidth)),
+      );
+    } catch {
+      // Ignore storage write failures; layout still works in-memory.
+    }
+  }, [leftWorkbenchWidth]);
 
   useEffect(() => {
     if (!showFileMenu) return;
@@ -483,9 +584,7 @@ export function EditorWorkspace({ docId }: Props) {
 
     const onMouseDownWindow = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      const clickedTrigger = Boolean(
-        target && displayMenuTriggerRef.current?.contains(target),
-      );
+      const clickedTrigger = Boolean(target && displayPanelTriggerRef.current?.contains(target));
       if (clickedTrigger) return;
       if (target && displayPanelRef.current && !displayPanelRef.current.contains(target)) {
         setShowDisplayMenu(false);
@@ -495,7 +594,7 @@ export function EditorWorkspace({ docId }: Props) {
     const onKeyDownWindow = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowDisplayMenu(false);
-        window.requestAnimationFrame(() => displayMenuTriggerRef.current?.focus());
+        window.requestAnimationFrame(() => displayPanelTriggerRef.current?.focus());
       }
     };
 
@@ -589,22 +688,60 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
-  const handleCreateNewDiagram = async () => {
-    const plugin = getDiagramPlugin("sankey");
-    if (!plugin) return;
+  const createNewDiagramByType = async (diagramType: DiagramType) => {
+    const diagramPlugin = getDiagramPlugin(diagramType);
+    if (!diagramPlugin) return;
     const now = Date.now();
     const newDoc: BaseDocument = {
       id: crypto.randomUUID(),
-      title: `Untitled ${plugin.displayName}`,
-      diagramType: "sankey",
+      title: `Untitled ${diagramPlugin.displayName}`,
+      diagramType,
       folderId: null,
       createdAt: now,
       updatedAt: now,
-      data: plugin.defaultData(),
+      data: diagramPlugin.defaultData(),
     };
     await upsertDocument(newDoc);
     addOpenDocument(newDoc);
     router.push(`/editor?id=${newDoc.id}`);
+  };
+
+  const handleCreateNewDiagram = () => {
+    setShowFileMenu(false);
+    setDiagramPickerMode("create");
+    setRememberDiagramTypeDefault(false);
+    setShowDiagramTypePicker(true);
+  };
+
+  const handleSwitchDiagramType = () => {
+    setShowFileMenu(false);
+    setShowDisplayMenu(false);
+    setDiagramPickerMode("switch");
+    setRememberDiagramTypeDefault(false);
+    setShowDiagramTypePicker(true);
+  };
+
+  const handleSelectDiagramType = async (diagramType: DiagramType) => {
+    setShowDiagramTypePicker(false);
+    if (diagramPickerMode === "switch" && diagramType === currentDoc.diagramType) {
+      return;
+    }
+    setIsCreatingDiagram(true);
+    try {
+      if (diagramPickerMode === "create" && rememberDiagramTypeDefault) {
+        const prefs = await loadAppPreferences();
+        await saveAppPreferences({ ...prefs, defaultDiagramType: diagramType });
+        setDefaultDiagramType(diagramType);
+      }
+      await createNewDiagramByType(diagramType);
+      if (diagramPickerMode === "switch") {
+        const targetLabel = getDiagramPlugin(diagramType)?.displayName ?? diagramType;
+        pushCanvasActionIssue("success", `Switched to ${targetLabel}`, "Opened as a new tab to preserve the current document.");
+      }
+    } finally {
+      setIsCreatingDiagram(false);
+      setRememberDiagramTypeDefault(false);
+    }
   };
 
   const focusFileMenuItem = useCallback((index: number) => {
@@ -697,6 +834,32 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
+  const handleLeftWorkbenchResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (isNarrowLayout || !leftWorkbenchVisible) return;
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startWidth = clampLeftWorkbenchWidth(leftWorkbenchWidth);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const nextWidth = clampLeftWorkbenchWidth(startWidth + delta);
+      setLeftWorkbenchWidth(nextWidth);
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   const onPluginDataChange = useCallback((newData: Record<string, unknown>) => {
     setHistoryPast((prev) => [...prev.slice(-19), currentDoc]);
     setHistoryFuture([]);
@@ -715,6 +878,9 @@ export function EditorWorkspace({ docId }: Props) {
     setHistoryPast(historyPast.slice(0, -1));
     initialize(previous);
     if (typeof previous.data.editorText === "string") setEditorTextState(previous.data.editorText);
+    if (previous.data.format === "json" || previous.data.format === "csv") {
+      setInputMode(previous.data.format);
+    }
     await upsertDocument(previous);
   }, [currentDoc, historyPast]);
 
@@ -725,6 +891,9 @@ export function EditorWorkspace({ docId }: Props) {
     setHistoryPast((prev) => [...prev, currentDoc]);
     initialize(next);
     if (typeof next.data.editorText === "string") setEditorTextState(next.data.editorText);
+    if (next.data.format === "json" || next.data.format === "csv") {
+      setInputMode(next.data.format);
+    }
     await upsertDocument(next);
   }, [currentDoc, historyFuture]);
 
@@ -779,8 +948,73 @@ export function EditorWorkspace({ docId }: Props) {
   }, []);
 
   const syncFromEditor = () => {
-    onPluginDataChange({ ...docData, editorText: editorText });
+    const nextFormat: DataFormat = inputMode === "csv" ? "csv" : "json";
+    onPluginDataChange({ ...docData, editorText: editorText, format: nextFormat });
     pushCanvasActionIssue("success", "Synced", "Visual validation complete");
+  };
+
+  useEffect(() => {
+    if (!autoSync) return;
+    const storedText = typeof docData.editorText === "string" ? docData.editorText : "";
+    const storedFormat: DataFormat = docData.format === "csv" ? "csv" : "json";
+    const nextFormat: DataFormat = inputMode === "csv" ? "csv" : "json";
+
+    if (storedText === editorText && storedFormat === nextFormat) return;
+
+    const timer = window.setTimeout(() => {
+      onPluginDataChange({ ...docData, editorText, format: nextFormat });
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [autoSync, docData, editorText, inputMode, onPluginDataChange]);
+
+  const linksToDsl = (links: EditableLink[]) =>
+    links.map((link) => `${link.source} [${link.value}] ${link.target}`).join("\n");
+
+  const applyEditorSource = (nextText: string, nextMode: InputMode, notify?: { title: string; desc?: string }) => {
+    const nextFormat: DataFormat = nextMode === "csv" ? "csv" : "json";
+    setInputMode(nextMode);
+    setEditorTextState(nextText);
+    onPluginDataChange({ ...docData, editorText: nextText, format: nextFormat });
+    if (notify) {
+      pushCanvasActionIssue("success", notify.title, notify.desc);
+    }
+  };
+
+  const handleInputModeChange = (nextMode: InputMode) => {
+    if (!supportedInputModes.includes(nextMode)) return;
+    if (nextMode === inputMode) return;
+
+    if (nextMode === "dsl") {
+      if (currentDoc.diagramType !== "sankey") return;
+      const canTransformDsl = graph.links.length > 0;
+      if (!canTransformDsl) {
+        applyEditorSource(editorText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
+        return;
+      }
+      const dslText = linksToDsl(graph.links);
+      applyEditorSource(dslText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
+      return;
+    }
+
+    const nextFormat: DataFormat = nextMode === "csv" ? "csv" : "json";
+    if (plugin?.serialize) {
+      const nextText = plugin.serialize(currentDoc.data, nextFormat);
+      applyEditorSource(nextText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
+      return;
+    }
+
+    const canTransform = graph.links.length > 0;
+    if (!canTransform) {
+      applyEditorSource(editorText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
+      return;
+    }
+
+    const nextText = nextMode === "csv"
+      ? serializeLinksByFormat(graph.links, "csv")
+      : serializeLinksByFormat(graph.links, "json");
+
+    applyEditorSource(nextText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
   };
 
   const handleToggleTheme = async () => {
@@ -957,6 +1191,56 @@ export function EditorWorkspace({ docId }: Props) {
     }
   };
 
+  const importSourceData = async (file: File) => {
+    const filename = file.name.toLowerCase();
+    const isCsv = filename.endsWith(".csv");
+    const isXlsx = filename.endsWith(".xlsx") || filename.endsWith(".xls");
+    const isJson = filename.endsWith(".json");
+
+    if (!isCsv && !isXlsx && !isJson) {
+      pushCanvasActionIssue("error", "Import failed", "Unsupported file type");
+      return;
+    }
+
+    try {
+      if (isCsv) {
+        const text = await file.text();
+        const preview = parseCsvPreview(text);
+        const links = rowsToCanonicalLinks(preview.rows, preview.mapping);
+        applyEditorSource(linksToCanonicalCsv(links), "csv", {
+          title: "Data imported",
+          desc: `${links.length} links from CSV`,
+        });
+        return;
+      }
+
+      if (isXlsx) {
+        const buffer = await file.arrayBuffer();
+        const preview = parseXlsxPreview(buffer);
+        const links = rowsToCanonicalLinks(preview.rows, preview.mapping);
+        applyEditorSource(linksToCanonicalCsv(links), "csv", {
+          title: "Data imported",
+          desc: `${links.length} links from XLSX`,
+        });
+        return;
+      }
+
+      const text = await file.text();
+      const preview = parseJsonPreview(text);
+      const links = rowsToCanonicalLinks(preview.rows, preview.mapping);
+      applyEditorSource(linksToCanonicalJson(links), "json", {
+        title: "Data imported",
+        desc: `${links.length} links from JSON`,
+      });
+    } catch (error) {
+      pushCanvasActionIssue(
+        "error",
+        "Import failed",
+        error instanceof Error ? error.message : "Unable to parse data file",
+      );
+    }
+  };
+
   // ---------------------------------------------------------------------------
   // Modals & Editing
   // ---------------------------------------------------------------------------
@@ -992,9 +1276,16 @@ export function EditorWorkspace({ docId }: Props) {
   }, [graph.nodes]);
 
   const applyNextLinksToEditor = (nextLinks: EditableLink[], successTitle: string, successDescription?: string) => {
-    const nextText = serializeLinksByFormat(nextLinks, docFormat);
+    const nextText =
+      inputMode === "dsl"
+        ? linksToDsl(nextLinks)
+        : serializeLinksByFormat(nextLinks, inputMode === "csv" ? "csv" : "json");
     setEditorText(nextText); // Also handled by plugin data change sync usually, but here immediate
-    onPluginDataChange({ ...docData, editorText: nextText });
+    onPluginDataChange({
+      ...docData,
+      editorText: nextText,
+      format: inputMode === "csv" ? "csv" : "json",
+    });
 
     if (activeEditorModal?.type === "link") {
       setPulseLinkIndex(activeEditorModal.index);
@@ -1066,26 +1357,29 @@ export function EditorWorkspace({ docId }: Props) {
   const leftWorkbenchPanel = (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-surface-container-high/90 shadow-(--shadow-lg) backdrop-blur-2xl">
       <div className="flex items-center justify-between border-b border-border p-4">
-        <h3 className="text-sm font-semibold tracking-wide text-foreground">Data Source</h3>
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold tracking-wide text-foreground">Data Source</h3>
+          <div className="flex items-center gap-1 rounded-full border border-border/70 bg-surface px-1 py-1">
+            {supportedInputModes.map((mode) => {
+              const isActive = inputMode === mode;
+              const Icon = mode === "json" ? Braces : mode === "csv" ? Table2 : Waypoints;
+              const title = mode === "dsl" ? 'DSL mode ("Source [value] Target")' : `${mode.toUpperCase()} mode`;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => handleInputModeChange(mode)}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium transition-colors ${isActive ? "bg-primary/12 text-primary" : "text-text-secondary hover:bg-surface-container hover:text-foreground"}`}
+                  title={title}
+                >
+                  <Icon className="h-3 w-3" />
+                  {mode.toUpperCase()}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="flex items-center gap-1">
-          {!isNarrowLayout && (
-            <>
-              <button
-                type="button"
-                onClick={() => setLeftWorkbenchMode("compact")}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${leftWorkbenchMode === "compact" ? "bg-primary/10 text-primary" : "text-text-secondary hover:bg-surface-container hover:text-foreground"}`}
-              >
-                Compact
-              </button>
-              <button
-                type="button"
-                onClick={() => setLeftWorkbenchMode("expanded")}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${leftWorkbenchMode === "expanded" ? "bg-primary/10 text-primary" : "text-text-secondary hover:bg-surface-container hover:text-foreground"}`}
-              >
-                Wide
-              </button>
-            </>
-          )}
           <button
             type="button"
             onClick={() => setLeftWorkbenchMode("collapsed")}
@@ -1107,8 +1401,9 @@ export function EditorWorkspace({ docId }: Props) {
         <SankeyMonacoEditor
           value={editorText}
           onChange={setEditorTextState}
-          format={docFormat}
+          format={inputMode}
           theme={appTheme}
+          marker={editorMarker}
           className="bg-transparent"
         />
       </div>
@@ -1135,9 +1430,11 @@ export function EditorWorkspace({ docId }: Props) {
           type="button"
           onClick={() => {
             setShowDisplayMenu(false);
-            displayMenuTriggerRef.current?.focus();
+            displayPanelTriggerRef.current?.focus();
           }}
-          className="text-text-secondary hover:text-foreground"
+          className="rounded-md p-1.5 text-text-secondary transition-colors hover:bg-surface-container hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          title="Collapse visual panel"
+          aria-label="Collapse visual panel"
         >
           <GalleryVerticalEnd className="w-3.5 h-3.5" />
         </button>
@@ -1193,7 +1490,7 @@ export function EditorWorkspace({ docId }: Props) {
               >
                 <button
                   onClick={() => router.push("/")}
-                  className="grid h-10 w-10 place-items-center rounded-xl transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   aria-label="Back to home"
                 >
                   <Image
@@ -1280,7 +1577,25 @@ export function EditorWorkspace({ docId }: Props) {
                         }}
                         className="w-full rounded-lg px-3 py-2 text-left text-xs text-text-secondary hover:bg-surface-container hover:text-foreground"
                       >
-                        Import JSON
+                        Import Config
+                      </button>
+                      <button
+                        type="button"
+                        ref={(node) => {
+                          fileMenuItemRefs.current[3] = node;
+                        }}
+                        tabIndex={showFileMenu ? 0 : -1}
+                        role="menuitem"
+                        onClick={() => {
+                          setShowFileMenu(false);
+                          importDataInputRef.current?.click();
+                        }}
+                        className="w-full rounded-lg px-3 py-2 text-left text-xs text-text-secondary hover:bg-surface-container hover:text-foreground"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <Database className="h-3.5 w-3.5" />
+                          Import Data
+                        </span>
                       </button>
                       <input
                         ref={importConfigJsonInputRef}
@@ -1288,31 +1603,39 @@ export function EditorWorkspace({ docId }: Props) {
                         className="hidden"
                         accept=".json"
                         onChange={(e) => {
-                          if (e.target.files?.[0]) importConfigJson(e.target.files[0]);
+                          if (e.target.files?.[0]) {
+                            void importConfigJson(e.target.files[0]);
+                          }
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                      <input
+                        ref={importDataInputRef}
+                        type="file"
+                        className="hidden"
+                        accept=".json,.csv,.xlsx,.xls"
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) {
+                            void importSourceData(e.target.files[0]);
+                          }
+                          e.currentTarget.value = "";
                         }}
                       />
                     </div>
                   </div>
 
-                  {plugin?.StylePanel && (
-                    <button
-                      ref={displayMenuTriggerRef}
-                      type="button"
-                      aria-haspopup="dialog"
-                      aria-expanded={showDisplayMenu}
-                      aria-controls="editor-display-panel"
-                      onClick={() => {
-                        setShowFileMenu(false);
-                        if (!showDisplayMenu && isNarrowLayout && leftWorkbenchMode !== "collapsed") {
-                          setLeftWorkbenchMode("collapsed");
-                        }
-                        setShowDisplayMenu((v) => !v);
-                      }}
-                      className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-medium transition-colors hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${showDisplayMenu ? "bg-primary/10 text-primary" : "text-text-secondary hover:text-foreground"}`}
-                    >
-                      View
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleSwitchDiagramType}
+                    className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border/70 bg-surface px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    title="Switch diagram type"
+                    aria-label="Switch diagram type"
+                  >
+                    {CurrentDiagramIcon ? <CurrentDiagramIcon className="h-3.5 w-3.5 opacity-80" /> : null}
+                    <span className="max-w-28 truncate">{currentDiagramLabel}</span>
+                    <ChevronsUpDown className="h-3 w-3 opacity-80" />
+                  </button>
+
                 </div>
 
                 <div className="min-w-0 overflow-hidden">
@@ -1331,7 +1654,7 @@ export function EditorWorkspace({ docId }: Props) {
                     initial={{ scale: 0.92, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     onClick={handleToggleTheme}
-                    className="flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-surface-container-high text-text-secondary transition hover:border-primary/50 hover:text-primary hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full border border-border/70 bg-surface-container-high text-text-secondary transition hover:border-primary/50 hover:text-primary hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     {appTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                   </motion.button>
@@ -1339,7 +1662,7 @@ export function EditorWorkspace({ docId }: Props) {
                   <motion.button
                     initial={{ scale: 0.92, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="flex h-10 items-center gap-2 rounded-full border border-primary/30 bg-primary px-5 text-sm font-semibold text-on-primary shadow-(--shadow-base) transition-all hover:brightness-95 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-55"
+                    className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-primary/30 bg-primary px-5 text-sm font-semibold text-on-primary shadow-(--shadow-base) transition-all hover:brightness-95 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-55"
                     onClick={() => handleExport("png")}
                     disabled={!canExportPng}
                     title={canExportPng ? "Export PNG" : "Canvas is not ready yet"}
@@ -1356,11 +1679,20 @@ export function EditorWorkspace({ docId }: Props) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.5 }}
-                className="grid h-full min-h-0"
+                className="relative grid h-full min-h-0"
                 style={{ gridTemplateColumns: "var(--editor-left-width) minmax(0,1fr) var(--editor-right-width)" }}
               >
                 {!isNarrowLayout && leftWorkbenchVisible ? (
-                  <aside className="min-h-0 pr-3">{leftWorkbenchPanel}</aside>
+                  <aside className="relative min-h-0 pr-3">
+                    {leftWorkbenchPanel}
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label="Resize data source panel"
+                      onPointerDown={handleLeftWorkbenchResizeStart}
+                      className="absolute right-0 top-1/2 z-30 h-24 w-3 -translate-y-1/2 cursor-col-resize rounded-full border border-border/70 bg-surface-container-high/70 transition-colors hover:border-primary/50 hover:bg-surface-container"
+                    />
+                  </aside>
                 ) : (
                   <div />
                 )}
@@ -1399,10 +1731,13 @@ export function EditorWorkspace({ docId }: Props) {
                 </div>
 
                 {!isNarrowLayout && rightWorkbenchVisible ? (
-                  <aside className="min-h-0 pl-3">{rightWorkbenchPanel}</aside>
+                  <aside className="min-h-0 pl-3">
+                    {rightWorkbenchPanel}
+                  </aside>
                 ) : (
                   <div />
                 )}
+
               </motion.div>
 
               <AnimatePresence mode="wait">
@@ -1419,19 +1754,21 @@ export function EditorWorkspace({ docId }: Props) {
                 )}
               </AnimatePresence>
 
-              <AnimatePresence>
+              <AnimatePresence initial={false}>
                 {isNarrowLayout && rightWorkbenchVisible && (
                   <motion.aside
-                    initial={{ x: 320, opacity: 0 }}
+                    initial={{ x: 24, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: 320, opacity: 0 }}
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    className="absolute right-0 top-0 z-40 flex h-full w-[min(22rem,calc(100vw-1.5rem))] flex-col"
+                    exit={{ x: 24, opacity: 0 }}
+                    transition={{ type: "spring", stiffness: 340, damping: 32, mass: 0.9 }}
+                    className="pointer-events-auto absolute inset-y-0 right-0 z-40 flex w-[min(24rem,calc(100vw-1.5rem))] max-w-[24rem] flex-col pl-3"
+                    style={{ willChange: "transform, opacity" }}
                   >
                     {rightWorkbenchPanel}
                   </motion.aside>
                 )}
               </AnimatePresence>
+
             </div>
           </div>
 
@@ -1445,11 +1782,36 @@ export function EditorWorkspace({ docId }: Props) {
                   if (window.innerWidth < 1280) {
                     setShowDisplayMenu(false);
                   }
-                  setLeftWorkbenchMode("compact");
+                  setLeftWorkbenchMode("expanded");
                 }}
                 className="flex h-12 w-6 items-center justify-center rounded-r-xl border-y border-r border-border bg-surface-container-high/85 text-text-secondary transition-all hover:w-8 hover:text-primary"
               >
                 <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
+          </motion.div>
+          <motion.div
+            className="absolute right-0 top-1/2 -translate-y-1/2 z-30 group"
+          >
+            {plugin?.StylePanel && !rightWorkbenchVisible && (
+              <button
+                ref={displayPanelTriggerRef}
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={showDisplayMenu}
+                aria-controls="editor-display-panel"
+                onClick={() => {
+                  setShowFileMenu(false);
+                  if (isNarrowLayout && leftWorkbenchVisible) {
+                    setLeftWorkbenchMode("collapsed");
+                  }
+                  setShowDisplayMenu(true);
+                }}
+                className="flex h-12 w-6 cursor-pointer items-center justify-center rounded-l-xl border-y border-l border-border bg-surface-container-high/85 text-text-secondary transition-all hover:w-8 hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                title="Open visual panel"
+                aria-label="Open visual panel"
+              >
+                <ChevronLeft className="h-4 w-4" />
               </button>
             )}
           </motion.div>
@@ -1552,10 +1914,10 @@ export function EditorWorkspace({ docId }: Props) {
               <h1 className="text-5xl font-display font-medium tracking-tight text-foreground" style={{ fontFamily: "var(--font-syne)" }}>
                 Ready to create?
               </h1>
-              <p className="text-sm text-text-secondary">Start with a new Sankey diagram and shape the flow from raw data.</p>
+              <p className="text-sm text-text-secondary">Pick a diagram type and shape the flow from raw data.</p>
               <button
                 onClick={handleCreateNewDiagram}
-                className="rounded-full border border-primary/30 bg-primary px-8 py-4 text-lg font-semibold text-on-primary shadow-(--shadow-base) transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                className="cursor-pointer rounded-full border border-primary/30 bg-primary px-8 py-4 text-lg font-semibold text-on-primary shadow-(--shadow-base) transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed"
               >
                 Start New Project
               </button>
@@ -1563,6 +1925,30 @@ export function EditorWorkspace({ docId }: Props) {
           </div>
         </div>
       )}
+
+      <DiagramTypePickerDialog
+        isOpen={showDiagramTypePicker}
+        plugins={availableDiagramPlugins}
+        onClose={() => {
+          if (!isCreatingDiagram) {
+            setShowDiagramTypePicker(false);
+            setDiagramPickerMode("create");
+            setRememberDiagramTypeDefault(false);
+          }
+        }}
+        onSelect={handleSelectDiagramType}
+        title={diagramPickerMode === "switch" ? "Switch Diagram Type" : "Create New Diagram"}
+        confirmHint={
+          diagramPickerMode === "switch"
+            ? `Current diagram: ${currentDiagramLabel}. Switching opens a new tab.`
+            : defaultDiagramLabel
+              ? `Choose a diagram type. Current default: ${defaultDiagramLabel}.`
+              : "Choose a diagram type for this new tab."
+        }
+        isSubmitting={isCreatingDiagram}
+        rememberAsDefault={diagramPickerMode === "create" ? rememberDiagramTypeDefault : false}
+        onRememberAsDefaultChange={diagramPickerMode === "create" ? setRememberDiagramTypeDefault : undefined}
+      />
 
       {dialogNode}
     </div>

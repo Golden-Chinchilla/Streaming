@@ -11,8 +11,9 @@ import { FlowLineStage } from "@/components/home/flow-line-stage";
 import { AnimatedHeroSvg } from "@/components/home/animated-hero-svg";
 import { loadAppPreferences, saveAppPreferences, upsertDocument } from "@/lib/storage";
 import { getAllDiagramPlugins, getDiagramPlugin } from "@/lib/diagram-registry";
-import { BaseDocument } from "@/lib/types";
+import { BaseDocument, DiagramType } from "@/lib/types";
 import { setThemeWithTransition } from "@/lib/theme-transition";
+import { DiagramTypePickerDialog } from "@/components/common/diagram-type-picker-dialog";
 
 const nowTimestamp = () => Date.now();
 
@@ -23,11 +24,15 @@ export function Dashboard() {
   const parallaxCurrentRef = useRef({ x: 0, y: 0 });
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [isEntering, setIsEntering] = useState(false);
+  const [defaultDiagramType, setDefaultDiagramType] = useState<DiagramType | null>(null);
+  const [showDiagramTypePicker, setShowDiagramTypePicker] = useState(false);
+  const [rememberAsDefault, setRememberAsDefault] = useState(false);
 
   useEffect(() => {
     loadAppPreferences().then((prefs) => {
       setTheme(prefs.defaultTheme);
       document.documentElement.setAttribute("data-theme", prefs.defaultTheme);
+      setDefaultDiagramType(prefs.defaultDiagramType ?? null);
     });
   }, []);
 
@@ -52,9 +57,7 @@ export function Dashboard() {
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
-  const entryPlugin = useMemo(() => {
-    return getDiagramPlugin("sankey") ?? getAllDiagramPlugins()[0] ?? null;
-  }, []);
+  const plugins = useMemo(() => getAllDiagramPlugins(), []);
 
   const handleToggleTheme = async () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -64,27 +67,58 @@ export function Dashboard() {
     await saveAppPreferences({ ...prefs, defaultTheme: next });
   };
 
-  const handleEnterEditor = async () => {
-    if (!entryPlugin || isEntering) {
+  const createAndOpenEditor = async (type: DiagramType) => {
+    const selectedPlugin = getDiagramPlugin(type);
+    if (!selectedPlugin) {
       router.push("/editor");
       return;
     }
-
-    setIsEntering(true);
-
     const now = nowTimestamp();
     const newDoc: BaseDocument = {
       id: crypto.randomUUID(),
-      title: `Untitled ${entryPlugin.displayName}`,
-      diagramType: entryPlugin.type,
+      title: `Untitled ${selectedPlugin.displayName}`,
+      diagramType: selectedPlugin.type,
       folderId: null,
       createdAt: now,
       updatedAt: now,
-      data: entryPlugin.defaultData(),
+      data: selectedPlugin.defaultData(),
     };
 
     await upsertDocument(newDoc);
     router.push(`/editor?id=${newDoc.id}`);
+  };
+
+  const handleEnterEditor = async () => {
+    if (isEntering) return;
+    const hasValidDefault = defaultDiagramType && Boolean(getDiagramPlugin(defaultDiagramType));
+    if (!hasValidDefault) {
+      setRememberAsDefault(false);
+      setShowDiagramTypePicker(true);
+      return;
+    }
+
+    setIsEntering(true);
+    try {
+      await createAndOpenEditor(defaultDiagramType);
+    } finally {
+      setIsEntering(false);
+    }
+  };
+
+  const handleSelectDiagramType = async (type: DiagramType) => {
+    setShowDiagramTypePicker(false);
+    setIsEntering(true);
+    try {
+      if (rememberAsDefault) {
+        const prefs = await loadAppPreferences();
+        await saveAppPreferences({ ...prefs, defaultDiagramType: type });
+        setDefaultDiagramType(type);
+      }
+      await createAndOpenEditor(type);
+    } finally {
+      setIsEntering(false);
+      setRememberAsDefault(false);
+    }
   };
 
   const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -127,7 +161,7 @@ export function Dashboard() {
         </div>
         <button
           onClick={handleToggleTheme}
-          className="rounded-full border border-border/70 bg-surface-container-high p-2.5 text-text-secondary transition hover:border-primary/50 hover:text-primary"
+          className="cursor-pointer rounded-full border border-border/70 bg-surface-container-high p-2.5 text-text-secondary transition hover:border-primary/50 hover:text-primary"
           aria-label="Toggle theme"
         >
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -153,7 +187,7 @@ export function Dashboard() {
               <button
                 onClick={handleEnterEditor}
                 disabled={isEntering}
-                className="group inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary px-7 py-3 text-sm font-semibold tracking-wide text-on-primary shadow-(--shadow-base) transition hover:-translate-y-0.5 hover:brightness-95 hover:shadow-(--shadow-lg) disabled:cursor-not-allowed disabled:opacity-65"
+                className="group inline-flex cursor-pointer items-center gap-2 rounded-full border border-primary/30 bg-primary px-7 py-3 text-sm font-semibold tracking-wide text-on-primary shadow-(--shadow-base) transition hover:-translate-y-0.5 hover:brightness-95 hover:shadow-(--shadow-lg) disabled:cursor-not-allowed disabled:opacity-65"
               >
                 {isEntering ? "Preparing..." : "Enter Editor"}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
@@ -167,6 +201,23 @@ export function Dashboard() {
           </div>
         </section>
       </main>
+
+      <DiagramTypePickerDialog
+        isOpen={showDiagramTypePicker}
+        plugins={plugins}
+        onClose={() => {
+          if (!isEntering) {
+            setShowDiagramTypePicker(false);
+            setRememberAsDefault(false);
+          }
+        }}
+        onSelect={handleSelectDiagramType}
+        title="Start With A Diagram Type"
+        confirmHint="Choose the visualization module before entering the editor."
+        isSubmitting={isEntering}
+        rememberAsDefault={rememberAsDefault}
+        onRememberAsDefaultChange={setRememberAsDefault}
+      />
     </div>
   );
 }

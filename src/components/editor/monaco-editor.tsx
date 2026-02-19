@@ -21,7 +21,7 @@ export type EditorMarker = {
 
 type Props = {
   value: string;
-  format: DataFormat;
+  format: DataFormat | "dsl";
   theme: "light" | "dark";
   onChange: (value: string) => void;
   marker?: EditorMarker | null;
@@ -127,7 +127,7 @@ export function SankeyMonacoEditor({ value, format, theme, onChange, marker, cla
     <MonacoEditor
       className={className}
       height="100%"
-      language={format === "csv" ? CSV_LANGUAGE_ID : "json"}
+      language={format === "csv" ? CSV_LANGUAGE_ID : format === "dsl" ? "plaintext" : "json"}
       value={value}
       onChange={(nextValue) => onChange(nextValue ?? "")}
       beforeMount={(monaco) => {

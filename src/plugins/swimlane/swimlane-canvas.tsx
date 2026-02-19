@@ -10,29 +10,89 @@ import { parseSwimlaneTextDetailed } from "./swimlane-parse";
 /*  Constants & utilities                                             */
 /* ------------------------------------------------------------------ */
 
-const LANE_PALETTE_DARK = [
-    "rgba(56, 189, 248, 0.06)",
-    "rgba(244, 114, 182, 0.06)",
-    "rgba(74, 222, 128, 0.06)",
-    "rgba(251, 191, 36, 0.06)",
-    "rgba(167, 139, 250, 0.06)",
-    "rgba(251, 146, 60, 0.06)",
-];
-const LANE_PALETTE_LIGHT = [
-    "rgba(56, 189, 248, 0.08)",
-    "rgba(244, 114, 182, 0.08)",
-    "rgba(74, 222, 128, 0.08)",
-    "rgba(251, 191, 36, 0.08)",
-    "rgba(167, 139, 250, 0.08)",
-    "rgba(251, 146, 60, 0.08)",
-];
-
-const NODE_COLORS: Record<SwimlaneNodeType, string> = {
-    start: "var(--flow-2)",
-    end: "var(--flow-5)",
-    task: "var(--flow-1)",
-    decision: "var(--flow-4)",
-    subprocess: "var(--flow-3)",
+const SWIMLANE_PALETTES: Record<
+    "classic" | "ocean" | "sunset",
+    {
+        lanesDark: string[];
+        lanesLight: string[];
+        nodes: Record<SwimlaneNodeType, string>;
+    }
+> = {
+    classic: {
+        lanesDark: [
+            "rgba(96, 165, 250, 0.08)",
+            "rgba(248, 113, 113, 0.08)",
+            "rgba(74, 222, 128, 0.08)",
+            "rgba(250, 204, 21, 0.08)",
+            "rgba(167, 139, 250, 0.08)",
+            "rgba(251, 146, 60, 0.08)",
+        ],
+        lanesLight: [
+            "rgba(96, 165, 250, 0.12)",
+            "rgba(248, 113, 113, 0.12)",
+            "rgba(74, 222, 128, 0.12)",
+            "rgba(250, 204, 21, 0.12)",
+            "rgba(167, 139, 250, 0.12)",
+            "rgba(251, 146, 60, 0.12)",
+        ],
+        nodes: {
+            start: "#5f8f49",
+            end: "#6a9c8f",
+            task: "#2f3742",
+            decision: "#d45745",
+            subprocess: "#d8a066",
+        },
+    },
+    ocean: {
+        lanesDark: [
+            "rgba(34, 211, 238, 0.08)",
+            "rgba(56, 189, 248, 0.08)",
+            "rgba(59, 130, 246, 0.08)",
+            "rgba(14, 165, 233, 0.08)",
+            "rgba(99, 102, 241, 0.08)",
+            "rgba(168, 85, 247, 0.08)",
+        ],
+        lanesLight: [
+            "rgba(34, 211, 238, 0.13)",
+            "rgba(56, 189, 248, 0.13)",
+            "rgba(59, 130, 246, 0.13)",
+            "rgba(14, 165, 233, 0.13)",
+            "rgba(99, 102, 241, 0.13)",
+            "rgba(168, 85, 247, 0.13)",
+        ],
+        nodes: {
+            start: "#3f9a74",
+            end: "#6b92c9",
+            task: "#2b557f",
+            decision: "#348ca8",
+            subprocess: "#7db8c7",
+        },
+    },
+    sunset: {
+        lanesDark: [
+            "rgba(251, 146, 60, 0.09)",
+            "rgba(249, 115, 22, 0.08)",
+            "rgba(244, 63, 94, 0.08)",
+            "rgba(236, 72, 153, 0.08)",
+            "rgba(234, 88, 12, 0.08)",
+            "rgba(250, 204, 21, 0.08)",
+        ],
+        lanesLight: [
+            "rgba(251, 146, 60, 0.14)",
+            "rgba(249, 115, 22, 0.13)",
+            "rgba(244, 63, 94, 0.13)",
+            "rgba(236, 72, 153, 0.13)",
+            "rgba(234, 88, 12, 0.13)",
+            "rgba(250, 204, 21, 0.13)",
+        ],
+        nodes: {
+            start: "#9f7b35",
+            end: "#cf6a5d",
+            task: "#65463d",
+            decision: "#c6473c",
+            subprocess: "#df985f",
+        },
+    },
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -50,8 +110,17 @@ export function SwimlaneCanvas({
     onSvgReady,
 }: CanvasProps<SwimlaneData>) {
     const { style, editorText, format } = data;
-    const isDark = style.theme === "dark";
+    const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(
+        typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "dark"
+            ? "dark"
+            : style.theme === "dark"
+                ? "dark"
+                : "light",
+    );
+    const isDark = resolvedTheme === "dark";
     const orientation = style.orientation ?? "horizontal";
+    const paletteKey = style.palette ?? "ocean";
+    const activePalette = SWIMLANE_PALETTES[paletteKey] ?? SWIMLANE_PALETTES.ocean;
 
     const svgRef = useRef<SVGSVGElement | null>(null);
     const [zoom, setZoom] = useState(1);
@@ -84,16 +153,31 @@ export function SwimlaneCanvas({
         }
     }, [onSvgReady]);
 
-    // Sync theme on mount
+    // Follow app theme changes (`data-theme`) to keep canvas in sync with light/dark mode.
     useEffect(() => {
-        const isSystemDark = document.documentElement.classList.contains("dark");
-        if (isSystemDark && style.theme === "light") {
-            onDataChange?.({
-                ...data,
-                style: { ...style, theme: "dark" },
-            });
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (typeof document === "undefined") return;
+
+        const resolve = () => {
+            setResolvedTheme(
+                document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
+            );
+        };
+
+        resolve();
+
+        const observer = new MutationObserver((mutations) => {
+            const themeChanged = mutations.some(
+                (mutation) => mutation.type === "attributes" && mutation.attributeName === "data-theme",
+            );
+            if (themeChanged) resolve();
+        });
+
+        observer.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-theme"],
+        });
+
+        return () => observer.disconnect();
     }, []);
 
     // Internal parsing
@@ -113,9 +197,9 @@ export function SwimlaneCanvas({
     );
 
     const laneColors = useMemo(() => {
-        const palette = isDark ? LANE_PALETTE_DARK : LANE_PALETTE_LIGHT;
-        return new Map(graph.lanes.map((lane, idx) => [lane.id, lane.color || palette[idx % palette.length]]));
-    }, [graph.lanes, isDark]);
+        const lanePalette = isDark ? activePalette.lanesDark : activePalette.lanesLight;
+        return new Map(graph.lanes.map((lane, idx) => [lane.id, lane.color || lanePalette[idx % lanePalette.length]]));
+    }, [graph.lanes, isDark, activePalette]);
 
     // Lane layout dimensions
     const HEADER_WIDTH = style.laneHeaderWidth;
@@ -681,7 +765,7 @@ export function SwimlaneCanvas({
                         const isHovered = hoveredNodeId === node.id;
                         const isDimmed = hoverContext && !hoverContext.highlightedNodes.has(node.id);
 
-                        const baseFill = node.color || NODE_COLORS[node.type] || NODE_COLORS.task;
+                        const baseFill = node.color || activePalette.nodes[node.type] || activePalette.nodes.task;
                         const strokeColor = isSelected || isHovered
                             ? "var(--text-primary)"
                             : isDark

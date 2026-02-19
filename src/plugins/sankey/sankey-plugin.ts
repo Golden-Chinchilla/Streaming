@@ -20,6 +20,7 @@ export const sankeyPlugin: DiagramPlugin<SankeyData> = {
     description: "Flow diagrams showing quantities between stages",
     icon: GitBranch,
     editorMode: "code",
+    inputModes: ["json", "csv", "dsl"],
     Canvas: SankeyCanvas,
     StylePanel: SankeyStylePanel,
     defaultData: () => ({ ...defaultSankeyData }),

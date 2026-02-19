@@ -1,8 +1,10 @@
-"use client";
+﻿"use client";
 
 import React from "react";
 import { StylePanelProps } from "@/lib/diagram-registry";
 import { SwimlaneData, SwimlaneStyle } from "./swimlane-types";
+import { parseSwimlaneTextDetailed, relayoutSwimlaneGraph } from "./swimlane-parse";
+import { serializeSwimlaneToJson } from "./swimlane-serialize";
 
 export function SwimlaneStylePanel({
     data,
@@ -17,6 +19,32 @@ export function SwimlaneStylePanel({
         });
     };
 
+    const handleAutoRelayout = () => {
+        const parsed = parseSwimlaneTextDetailed(data.editorText, data.format);
+        if (!parsed.ok) return;
+
+        const relayoutNodes = relayoutSwimlaneGraph(
+            parsed.graph.lanes,
+            parsed.graph.nodes,
+            parsed.graph.edges,
+        );
+
+        const nextGraph = {
+            lanes: parsed.graph.lanes,
+            nodes: relayoutNodes,
+            edges: parsed.graph.edges,
+        };
+
+        onDataChange({
+            ...data,
+            format: "json",
+            editorText: serializeSwimlaneToJson(nextGraph),
+            lanes: nextGraph.lanes,
+            nodes: nextGraph.nodes,
+            edges: nextGraph.edges,
+        });
+    };
+
     const labelClass = "text-xs font-medium text-muted block mb-1";
     const sliderClass = "w-full accent-primary";
     const sectionClass = "space-y-2 pb-4 border-b border-border last:border-b-0";
@@ -26,25 +54,6 @@ export function SwimlaneStylePanel({
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">
                 Swimlane Style
             </h3>
-
-            {/* Theme Switcher */}
-            <div className={sectionClass}>
-                <label className={labelClass}>Theme</label>
-                <div className="grid grid-cols-2 gap-1.5">
-                    {(["light", "dark"] as const).map((t) => (
-                        <button
-                            key={t}
-                            onClick={() => updateStyle({ theme: t })}
-                            className={`rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-all ${style.theme === t
-                                ? "bg-primary text-on-primary shadow-sm"
-                                : "bg-surface-container text-foreground/70 hover:bg-surface-container-high"
-                                }`}
-                        >
-                            {t}
-                        </button>
-                    ))}
-                </div>
-            </div>
 
             <div className={sectionClass}>
                 <label className={labelClass}>Lane Orientation</label>
@@ -67,10 +76,21 @@ export function SwimlaneStylePanel({
                 </div>
             </div>
 
+            <div className={sectionClass}>
+                <label className={labelClass}>Layout</label>
+                <button
+                    type="button"
+                    onClick={handleAutoRelayout}
+                    className="w-full rounded-lg border border-border bg-surface-container px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-surface-container-high"
+                >
+                    Auto Reflow Nodes
+                </button>
+            </div>
+
             {/* Lane Header Width */}
             <div className={sectionClass}>
                 <label className={labelClass}>
-                    Lane Header Width — {style.laneHeaderWidth}px
+                    Lane Header Width - {style.laneHeaderWidth}px
                 </label>
                 <input
                     type="range"
@@ -88,7 +108,7 @@ export function SwimlaneStylePanel({
             {/* Node Radius */}
             <div className={sectionClass}>
                 <label className={labelClass}>
-                    Node Radius — {style.nodeRadius}px
+                    Node Radius - {style.nodeRadius}px
                 </label>
                 <input
                     type="range"
@@ -106,7 +126,7 @@ export function SwimlaneStylePanel({
             {/* Edge Opacity */}
             <div className={sectionClass}>
                 <label className={labelClass}>
-                    Edge Opacity — {Math.round(style.edgeOpacity * 100)}%
+                    Edge Opacity - {Math.round(style.edgeOpacity * 100)}%
                 </label>
                 <input
                     type="range"
@@ -124,7 +144,7 @@ export function SwimlaneStylePanel({
             {/* Edge Curvature */}
             <div className={sectionClass}>
                 <label className={labelClass}>
-                    Edge Curvature — {Math.round(style.edgeCurvature * 100)}%
+                    Edge Curvature - {Math.round(style.edgeCurvature * 100)}%
                 </label>
                 <input
                     type="range"
@@ -142,7 +162,7 @@ export function SwimlaneStylePanel({
             {/* Label Font Size */}
             <div className={sectionClass}>
                 <label className={labelClass}>
-                    Label Size — {style.labelFontSize}px
+                    Label Size - {style.labelFontSize}px
                 </label>
                 <input
                     type="range"
@@ -203,3 +223,4 @@ export function SwimlaneStylePanel({
         </div>
     );
 }
+

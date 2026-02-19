@@ -17,6 +17,7 @@ const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultPerformanceMode: "auto",
   defaultExportTransparentBg: false,
   defaultExportFileTemplate: "{title}-{date}",
+  defaultDiagramType: null,
 };
 
 /* ------------------------------------------------------------------ */
@@ -276,6 +277,10 @@ export async function loadAppPreferences(): Promise<AppPreferences> {
         raw.defaultExportFileTemplate.trim().length > 0
         ? raw.defaultExportFileTemplate
         : "{title}-{date}",
+    defaultDiagramType:
+      raw.defaultDiagramType === "sankey" || raw.defaultDiagramType === "swimlane"
+        ? raw.defaultDiagramType
+        : null,
   };
 }
 

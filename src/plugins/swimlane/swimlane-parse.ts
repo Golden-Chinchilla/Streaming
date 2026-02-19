@@ -30,6 +30,10 @@ const nodeSchema = z.object({
     type: nodeTypeSchema.default("task"),
     laneId: z.string().min(1),
     color: z.string().optional(),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+    width: z.number().positive().optional(),
+    height: z.number().positive().optional(),
 });
 
 const edgeSchema = z.object({
@@ -142,14 +146,25 @@ function autoLayout(
         const rowInCol = colMap.get(col) ?? 0;
         colMap.set(col, rowInCol + 1);
 
+        const nodeWidth = Number.isFinite(node.width) ? node.width : NODE_WIDTH;
+        const nodeHeight = Number.isFinite(node.height) ? node.height : NODE_HEIGHT;
+
         return {
             ...node,
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-            x: PADDING_LEFT + col * (NODE_WIDTH + COL_GAP),
-            y: PADDING_TOP + laneIdx * LANE_HEIGHT + rowInCol * (NODE_HEIGHT + ROW_GAP),
+            width: nodeWidth,
+            height: nodeHeight,
+            x: PADDING_LEFT + col * (nodeWidth + COL_GAP),
+            y: PADDING_TOP + laneIdx * LANE_HEIGHT + rowInCol * (nodeHeight + ROW_GAP),
         };
     });
+}
+
+export function relayoutSwimlaneGraph(
+    lanes: SwimlaneLane[],
+    nodes: SwimlaneNode[],
+    edges: SwimlaneEdge[],
+): SwimlaneNode[] {
+    return autoLayout(lanes, nodes, edges);
 }
 
 /* ------------------------------------------------------------------ */
@@ -268,10 +283,10 @@ function parseJson(text: string): SwimlaneParseResult {
         label: n.label,
         type: n.type as SwimlaneNodeType,
         laneId: n.laneId,
-        x: 0,
-        y: 0,
-        width: 140,
-        height: 40,
+        x: typeof n.x === "number" ? n.x : 0,
+        y: typeof n.y === "number" ? n.y : 0,
+        width: typeof n.width === "number" ? n.width : 140,
+        height: typeof n.height === "number" ? n.height : 40,
         color: n.color,
     }));
 
@@ -282,7 +297,12 @@ function parseJson(text: string): SwimlaneParseResult {
         label: e.label,
     }));
 
-    const layoutNodes = autoLayout(lanes, rawNodes, edges);
+    const hasExplicitNodePositions = data.nodes.every(
+        (node) => typeof node.x === "number" && typeof node.y === "number",
+    );
+    const layoutNodes = hasExplicitNodePositions
+        ? rawNodes
+        : autoLayout(lanes, rawNodes, edges);
 
     return {
         ok: true,

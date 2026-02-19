@@ -250,6 +250,22 @@ body {
   font-family: var(--font-inter), sans-serif;
 }
 
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href],
+summary,
+label[for],
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 320ms;

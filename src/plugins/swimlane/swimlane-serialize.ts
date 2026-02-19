@@ -19,6 +19,10 @@ export function serializeSwimlaneToJson(graph: SwimlaneGraph): string {
             label: n.label,
             type: n.type,
             laneId: n.laneId,
+            x: n.x,
+            y: n.y,
+            width: n.width,
+            height: n.height,
             ...(n.color ? { color: n.color } : {}),
         })),
         edges: graph.edges.map((e) => ({

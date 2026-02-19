@@ -66,4 +66,5 @@ export type AppPreferences = {
   defaultPerformanceMode: PerformanceMode;
   defaultExportTransparentBg: boolean;
   defaultExportFileTemplate: string;
+  defaultDiagramType?: DiagramType | null;
 };

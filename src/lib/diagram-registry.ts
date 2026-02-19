@@ -42,6 +42,12 @@ export type ParseResult<TData = Record<string, unknown>> = {
     error?: string | null;
 };
 
+/**
+ * Input modes rendered in the editor's left data source header.
+ * `dsl` is currently Sankey-specific textual shorthand.
+ */
+export type EditorInputMode = "json" | "csv" | "dsl";
+
 /* ------------------------------------------------------------------ */
 /*  DiagramPlugin interface                                           */
 /* ------------------------------------------------------------------ */
@@ -58,6 +64,8 @@ export interface DiagramPlugin<TData = Record<string, unknown>> {
 
     /** How the editor should behave for this diagram type */
     editorMode: EditorMode;
+    /** Input modes shown in the editor; defaults to ["json"] when omitted */
+    inputModes?: EditorInputMode[];
 
     /** The main rendering component */
     Canvas: ComponentType<CanvasProps<TData>>;

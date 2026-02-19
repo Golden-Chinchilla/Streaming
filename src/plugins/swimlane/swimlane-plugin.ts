@@ -18,6 +18,7 @@ export const swimlanePlugin: DiagramPlugin<SwimlaneData> = {
     description: "Process mapping with pools and lanes",
     icon: Trello,
     editorMode: "code",
+    inputModes: ["json"],
     Canvas: SwimlaneCanvas,
     StylePanel: SwimlaneStylePanel,
     defaultData: () => ({ ...defaultSwimlaneData }),

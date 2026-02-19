@@ -3,13 +3,16 @@
 import "@/plugins/register-all";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Moon, Sun, ArrowRight } from "lucide-react";
+import logoLight from "@/assets/logo/logo-light.svg";
 import { FlowLineStage } from "@/components/home/flow-line-stage";
 import { AnimatedHeroSvg } from "@/components/home/animated-hero-svg";
 import { loadAppPreferences, saveAppPreferences, upsertDocument } from "@/lib/storage";
 import { getAllDiagramPlugins, getDiagramPlugin } from "@/lib/diagram-registry";
 import { BaseDocument } from "@/lib/types";
+import { setThemeWithTransition } from "@/lib/theme-transition";
 
 const nowTimestamp = () => Date.now();
 
@@ -56,7 +59,7 @@ export function Dashboard() {
   const handleToggleTheme = async () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
+    setThemeWithTransition(next);
     const prefs = await loadAppPreferences();
     await saveAppPreferences({ ...prefs, defaultTheme: next });
   };
@@ -112,10 +115,15 @@ export function Dashboard() {
 
       <header className="relative z-20 flex items-center justify-between px-6 py-5 md:px-10">
         <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-full border border-border/70 bg-surface-container-high text-sm font-semibold tracking-[0.14em] text-primary shadow-(--shadow-sm)">
-            LOGO
+          <div className="brand-logo-entry brand-logo-shell grid h-12 w-12 place-items-center">
+            <Image
+              src={logoLight}
+              alt="Streaming logo"
+              className="brand-logo-img brand-logo-img--adaptive h-12 w-12 select-none"
+              priority
+            />
           </div>
-          <span className="text-xs uppercase tracking-[0.26em] text-muted">Streaming</span>
+          <span className="text-sm font-semibold uppercase tracking-[0.17em] text-foreground">Streaming</span>
         </div>
         <button
           onClick={handleToggleTheme}

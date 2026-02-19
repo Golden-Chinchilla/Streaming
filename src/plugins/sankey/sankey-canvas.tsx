@@ -235,6 +235,13 @@ export function SankeyCanvas({
   const [hoverText, setHoverText] = useState<string | null>(null);
   const [hoveredLinkIndex, setHoveredLinkIndex] = useState<number | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(
+    typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "dark"
+      ? "dark"
+      : style.theme === "dark"
+        ? "dark"
+        : "light",
+  );
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState<{
@@ -262,9 +269,7 @@ export function SankeyCanvas({
   const colorStrategy = style.colorStrategy ?? "palette";
   const labelStyle = style.labelStyle ?? "badge";
   const linkRender = style.linkRender ?? "soft";
-  const isDark = typeof document !== "undefined"
-    ? document.documentElement.getAttribute("data-theme") === "dark"
-    : style.theme === "dark";
+  const isDark = resolvedTheme === "dark";
   const tooltipBg = isDark ? "var(--bg-secondary)" : "var(--text-primary)";
   const labelColor = style.labelColor || (isDark ? DARK_LABEL_COLOR : LIGHT_LABEL_COLOR);
   const insideLabelColor = isDark ? "rgba(248,250,252,0.96)" : "rgba(15,23,42,0.92)";
@@ -279,6 +284,32 @@ export function SankeyCanvas({
   const canHoverLinks = effectiveHints.enableLinkHover && !degradedDetail;
   const isPanActive = interactionMode === "pan" || isSpacePanning;
   const cursorClass = panning ? "cursor-grabbing" : isPanActive ? "cursor-grab" : "cursor-default";
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const resolve = () => {
+      setResolvedTheme(
+        document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light",
+      );
+    };
+
+    resolve();
+
+    const observer = new MutationObserver((mutations) => {
+      const themeChanged = mutations.some(
+        (mutation) => mutation.type === "attributes" && mutation.attributeName === "data-theme",
+      );
+      if (themeChanged) resolve();
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+
+    return () => observer.disconnect();
+  }, []);
 
   const nodeRoleMap = useMemo(() => {
     const indegree = new Map<string, number>();

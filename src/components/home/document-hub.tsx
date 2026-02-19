@@ -17,6 +17,7 @@ import {
     getAllDiagramPlugins,
     getDiagramPlugin
 } from "@/lib/diagram-registry";
+import { setThemeWithTransition } from "@/lib/theme-transition";
 import {
     LayoutGrid,
     List,
@@ -153,7 +154,7 @@ export function DocumentHub() {
     const handleToggleTheme = async () => {
         const next = theme === "dark" ? "light" : "dark";
         setTheme(next);
-        document.documentElement.setAttribute("data-theme", next);
+        setThemeWithTransition(next);
         const prefs = await loadAppPreferences();
         await saveAppPreferences({ ...prefs, defaultTheme: next });
     };

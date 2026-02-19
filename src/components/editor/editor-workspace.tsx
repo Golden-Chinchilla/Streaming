@@ -3,11 +3,11 @@
 import "@/plugins/register-all";
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
-  LayoutTemplate,
   Moon,
   Play,
   Redo2,
@@ -16,6 +16,8 @@ import {
   Share2,
   GalleryVerticalEnd
 } from "lucide-react";
+import logoLight from "@/assets/logo/logo-light.svg";
+import emptyEditorArt from "@/assets/svg/Exploring-cuate.svg";
 import {
   SankeyMonacoEditor,
 } from "@/components/editor/monaco-editor";
@@ -49,6 +51,7 @@ import {
 } from "@/lib/storage";
 import { isMac } from "@/lib/os-utils";
 import { useEditorStore } from "@/store/editor-store";
+import { setThemeWithTransition } from "@/lib/theme-transition";
 import { EditorTabs } from "@/components/editor/editor-tabs";
 import {
   FlowEditModal,
@@ -783,7 +786,7 @@ export function EditorWorkspace({ docId }: Props) {
   const handleToggleTheme = async () => {
     const next = appTheme === "dark" ? "light" : "dark";
     setAppTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
+    setThemeWithTransition(next);
     const prefs = await loadAppPreferences();
     await saveAppPreferences({ ...prefs, defaultTheme: next });
   };
@@ -1190,9 +1193,15 @@ export function EditorWorkspace({ docId }: Props) {
               >
                 <button
                   onClick={() => router.push("/")}
-                  className="grid h-10 w-10 place-items-center rounded-full bg-surface-container text-primary transition-colors hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="grid h-10 w-10 place-items-center rounded-xl transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  aria-label="Back to home"
                 >
-                  <LayoutTemplate className="h-4 w-4" />
+                  <Image
+                    src={logoLight}
+                    alt="Streaming logo"
+                    className="h-8 w-8 select-none"
+                    priority
+                  />
                 </button>
 
                 <div className="min-w-0 flex items-center gap-2">
@@ -1530,17 +1539,27 @@ export function EditorWorkspace({ docId }: Props) {
 
       {!hasOpenTabs && (
         <div className="relative z-10 flex h-full w-full items-center justify-center">
-          <div className="text-center space-y-6">
-            <h1 className="text-5xl font-display font-medium tracking-tight text-foreground" style={{ fontFamily: "var(--font-syne)" }}>
-              Ready to create?
-            </h1>
-            <p className="text-sm text-text-secondary">Start with a new Sankey diagram and shape the flow from raw data.</p>
-            <button
-              onClick={handleCreateNewDiagram}
-              className="rounded-full border border-primary/30 bg-primary px-8 py-4 text-lg font-semibold text-on-primary shadow-(--shadow-base) transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-            >
-              Start New Project
-            </button>
+          <div className="flex w-full max-w-5xl flex-col items-center gap-8 px-6 md:flex-row">
+            <div className="w-full max-w-xl">
+              <Image
+                src={emptyEditorArt}
+                alt="Empty editor illustration"
+                className="h-auto w-full object-contain illustration-glow"
+                priority
+              />
+            </div>
+            <div className="w-full max-w-md text-center space-y-6 md:text-left">
+              <h1 className="text-5xl font-display font-medium tracking-tight text-foreground" style={{ fontFamily: "var(--font-syne)" }}>
+                Ready to create?
+              </h1>
+              <p className="text-sm text-text-secondary">Start with a new Sankey diagram and shape the flow from raw data.</p>
+              <button
+                onClick={handleCreateNewDiagram}
+                className="rounded-full border border-primary/30 bg-primary px-8 py-4 text-lg font-semibold text-on-primary shadow-(--shadow-base) transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                Start New Project
+              </button>
+            </div>
           </div>
         </div>
       )}

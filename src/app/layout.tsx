@@ -30,6 +30,11 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Streaming",
   description: "Professional visualization studio",
+  icons: {
+    icon: "/logo-tab.svg",
+    shortcut: "/logo-tab.svg",
+    apple: "/logo-tab.svg",
+  },
 };
 
 export default function RootLayout({

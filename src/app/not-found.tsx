@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { EmptyStateIllustration } from '@/components/illustrations/EmptyStateIllustration';
+import Image from 'next/image';
 import { ArrowLeft } from 'lucide-react';
+import notFoundArt from '@/assets/svg/404 error with person looking for-cuate.svg';
 
 export default function NotFound() {
     return (
@@ -11,9 +12,11 @@ export default function NotFound() {
 
                 {/* Illustration */}
                 <div className="w-full aspect-square max-w-100 mx-auto">
-                    <EmptyStateIllustration
-                        animate={true}
-                        className="w-full h-full drop-shadow-xl illustration-glow"
+                    <Image
+                        src={notFoundArt}
+                        alt="404 illustration"
+                        className="w-full h-full object-contain drop-shadow-xl illustration-glow"
+                        priority
                     />
                 </div>
 

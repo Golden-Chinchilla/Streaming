@@ -2,18 +2,48 @@ export type AppTheme = "light" | "dark";
 
 let clearTransitionTimer: number | null = null;
 
-export function setThemeWithTransition(nextTheme: AppTheme, durationMs = 380) {
+export function setThemeWithTransition(
+  nextTheme: AppTheme,
+  event?: React.MouseEvent | MouseEvent,
+  durationMs = 400
+) {
   if (typeof document === "undefined") return;
 
   const root = document.documentElement;
   const className = "theme-transition-active";
   const docWithViewTransition = document as Document & {
-    startViewTransition?: (updateCallback: () => void) => { finished: Promise<void> };
+    startViewTransition?: (updateCallback: () => void) => {
+      finished: Promise<void>;
+      ready: Promise<void>;
+    };
   };
 
+  const x = event?.clientX ?? window.innerWidth / 2;
+  const y = event?.clientY ?? window.innerHeight / 2;
+  const endRadius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y)
+  );
+
   if (typeof docWithViewTransition.startViewTransition === "function") {
-    docWithViewTransition.startViewTransition(() => {
+    const transition = docWithViewTransition.startViewTransition(() => {
       root.setAttribute("data-theme", nextTheme);
+    });
+
+    transition.ready.then(() => {
+      const clipPath = [
+        `circle(0px at ${x}px ${y}px)`,
+        `circle(${endRadius}px at ${x}px ${y}px)`,
+      ];
+
+      document.documentElement.animate(
+        { clipPath },
+        {
+          duration: durationMs,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+          pseudoElement: "::view-transition-new(root)",
+        }
+      );
     });
     return;
   }

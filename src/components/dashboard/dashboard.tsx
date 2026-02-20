@@ -59,10 +59,10 @@ export function Dashboard() {
 
   const plugins = useMemo(() => getAllDiagramPlugins(), []);
 
-  const handleToggleTheme = async () => {
+  const handleToggleTheme = async (e: React.MouseEvent) => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    setThemeWithTransition(next);
+    setThemeWithTransition(next, e);
     const prefs = await loadAppPreferences();
     await saveAppPreferences({ ...prefs, defaultTheme: next });
   };

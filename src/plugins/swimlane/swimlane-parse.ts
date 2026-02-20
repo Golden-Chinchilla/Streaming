@@ -112,16 +112,11 @@ function autoLayout(
         }
     }
 
-    // Build lane index map
-    const laneIndex = new Map<string, number>();
-    lanes.forEach((lane, idx) => laneIndex.set(lane.id, idx));
-
     // Layout constants
     const NODE_WIDTH = 140;
     const NODE_HEIGHT = 40;
     const COL_GAP = 60;
     const ROW_GAP = 30;
-    const LANE_HEIGHT = 100;
     const PADDING_LEFT = 40;
     const PADDING_TOP = 20;
 
@@ -139,7 +134,6 @@ function autoLayout(
 
     return nodes.map((node) => {
         const col = topoOrder.get(node.id) ?? 0;
-        const laneIdx = laneIndex.get(node.laneId) ?? 0;
 
         if (!laneColCounter.has(node.laneId)) laneColCounter.set(node.laneId, new Map());
         const colMap = laneColCounter.get(node.laneId)!;
@@ -154,7 +148,49 @@ function autoLayout(
             width: nodeWidth,
             height: nodeHeight,
             x: PADDING_LEFT + col * (nodeWidth + COL_GAP),
-            y: PADDING_TOP + laneIdx * LANE_HEIGHT + rowInCol * (nodeHeight + ROW_GAP),
+            // Keep Y local to each lane. Lane offsets are applied by canvas layout.
+            y: PADDING_TOP + rowInCol * (nodeHeight + ROW_GAP),
+        };
+    });
+}
+
+function normalizeLegacyAbsoluteLaneY(
+    lanes: SwimlaneLane[],
+    nodes: SwimlaneNode[],
+): SwimlaneNode[] {
+    const LEGACY_PADDING_TOP = 20;
+    const LEGACY_LANE_HEIGHT = 100;
+
+    const laneIndex = new Map<string, number>();
+    lanes.forEach((lane, idx) => laneIndex.set(lane.id, idx));
+
+    let legacyPatternScore = 0;
+    let inspectedLanes = 0;
+
+    for (const lane of lanes) {
+        const idx = laneIndex.get(lane.id) ?? 0;
+        if (idx === 0) continue;
+        const laneNodes = nodes.filter((node) => node.laneId === lane.id);
+        if (laneNodes.length === 0) continue;
+        inspectedLanes += 1;
+        const minY = Math.min(...laneNodes.map((node) => node.y));
+        const expectedMin = LEGACY_PADDING_TOP + idx * LEGACY_LANE_HEIGHT;
+        if (minY >= expectedMin - 8) {
+            legacyPatternScore += 1;
+        }
+    }
+
+    const looksLikeLegacyAbsoluteY =
+        inspectedLanes > 0 && legacyPatternScore === inspectedLanes;
+
+    if (!looksLikeLegacyAbsoluteY) return nodes;
+
+    return nodes.map((node) => {
+        const idx = laneIndex.get(node.laneId) ?? 0;
+        const normalizedY = node.y - idx * LEGACY_LANE_HEIGHT;
+        return {
+            ...node,
+            y: Math.max(0, normalizedY),
         };
     });
 }
@@ -301,7 +337,7 @@ function parseJson(text: string): SwimlaneParseResult {
         (node) => typeof node.x === "number" && typeof node.y === "number",
     );
     const layoutNodes = hasExplicitNodePositions
-        ? rawNodes
+        ? normalizeLegacyAbsoluteLaneY(lanes, rawNodes)
         : autoLayout(lanes, rawNodes, edges);
 
     return {

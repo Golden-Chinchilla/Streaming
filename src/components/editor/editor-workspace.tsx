@@ -120,6 +120,7 @@ const EDITOR_LEFT_MIN_WIDTH = 280;
 const EDITOR_LEFT_MAX_WIDTH = 560;
 const EDITOR_RIGHT_PANEL_WIDTH = 384;
 const EDITOR_BOTTOM_SAFE_AREA = 88;
+const EDITOR_TITLE_MAX_LENGTH = 80;
 
 type LeftWorkbenchMode = "collapsed" | "compact" | "expanded";
 type InputMode = EditorInputMode;
@@ -383,10 +384,10 @@ export function EditorWorkspace({ docId }: Props) {
     return result.ok
       ? null
       : {
-          message: result.issue.message,
-          line: result.issue.line,
-          column: result.issue.column,
-        };
+        message: result.issue.message,
+        line: result.issue.line,
+        column: result.issue.column,
+      };
   }, [docEditorText, docFormat]);
 
   const graph = useMemo(() => ({ nodes: parseResult.nodes, links: parseResult.links }), [parseResult.links, parseResult.nodes]);
@@ -532,6 +533,26 @@ export function EditorWorkspace({ docId }: Props) {
     onResizeWindow();
     return () => window.removeEventListener("resize", onResizeWindow);
   }, [leftWorkbenchMode, showDisplayMenu]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const syncThemeFromDom = () => {
+      const nextTheme = root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      setAppTheme(nextTheme);
+    };
+    syncThemeFromDom();
+
+    const observer = new MutationObserver((mutations) => {
+      const themeChanged = mutations.some(
+        (mutation) => mutation.type === "attributes" && mutation.attributeName === "data-theme",
+      );
+      if (themeChanged) syncThemeFromDom();
+    });
+
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -802,18 +823,19 @@ export function EditorWorkspace({ docId }: Props) {
   };
 
   const setTitle = (newTitle: string) => {
-    initialize((prev) => ({ ...prev, title: newTitle }));
-    storeSetTitle(newTitle); // Sync store
+    const normalizedTitle = newTitle.slice(0, EDITOR_TITLE_MAX_LENGTH);
+    initialize((prev) => ({ ...prev, title: normalizedTitle }));
+    storeSetTitle(normalizedTitle); // Sync store
 
     // Initializing prev state properly for local update
-    updateDocumentTitle(currentDoc.id, newTitle);
+    updateDocumentTitle(currentDoc.id, normalizedTitle);
 
     if (titleSaveTimerRef.current) {
       clearTimeout(titleSaveTimerRef.current);
     }
     const docSnapshot = currentDoc;
     titleSaveTimerRef.current = setTimeout(() => {
-      void upsertDocument({ ...docSnapshot, title: newTitle, updatedAt: Date.now() });
+      void upsertDocument({ ...docSnapshot, title: normalizedTitle, updatedAt: Date.now() });
       titleSaveTimerRef.current = null;
     }, 500);
   };
@@ -1017,10 +1039,10 @@ export function EditorWorkspace({ docId }: Props) {
     applyEditorSource(nextText, nextMode, { title: `Switched to ${nextMode.toUpperCase()}` });
   };
 
-  const handleToggleTheme = async () => {
+  const handleToggleTheme = async (e?: React.MouseEvent | MouseEvent) => {
     const next = appTheme === "dark" ? "light" : "dark";
     setAppTheme(next);
-    setThemeWithTransition(next);
+    setThemeWithTransition(next, e);
     const prefs = await loadAppPreferences();
     await saveAppPreferences({ ...prefs, defaultTheme: next });
   };
@@ -1113,7 +1135,7 @@ export function EditorWorkspace({ docId }: Props) {
           ctx.fillStyle = appTheme === "dark" ? "#050505" : "#ffffff";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
-        const img = new Image();
+        const img = new window.Image();
         const svgString = buildExportReadySvg(svgElement, appTheme);
         const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
         const url = URL.createObjectURL(blob);
@@ -1459,9 +1481,8 @@ export function EditorWorkspace({ docId }: Props) {
       <div className="absolute inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,color-mix(in_srgb,var(--primary)_14%,transparent)_0%,transparent_52%),radial-gradient(circle_at_80%_80%,color-mix(in_srgb,var(--text-primary)_8%,transparent)_0%,transparent_48%)]" />
         <div
-          className="absolute inset-0 opacity-[0.03]"
+          className="absolute inset-0 opacity-[0.03] canvas-grid"
           style={{
-            backgroundImage: "linear-gradient(var(--canvas-grid-accent) 1px, transparent 1px), linear-gradient(90deg, var(--canvas-grid-accent) 1px, transparent 1px)",
             backgroundSize: "40px 40px",
           }}
         />
@@ -1483,11 +1504,11 @@ export function EditorWorkspace({ docId }: Props) {
             )}
 
             <header className="pointer-events-none relative z-50 px-3 pt-3 md:px-4 md:pt-4">
-              <motion.div
-                initial={{ y: -16, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                className="pointer-events-auto grid h-(--editor-header-height) grid-cols-[auto_minmax(0,16rem)_minmax(0,1fr)_auto] items-center gap-2 rounded-full border border-border/70 bg-surface-container-high/85 px-2 shadow-(--shadow-base) backdrop-blur-xl md:gap-3 md:px-3"
-              >
+                <motion.div
+                  initial={{ y: -16, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  className="pointer-events-auto grid h-(--editor-header-height) grid-cols-[auto_minmax(0,24rem)_minmax(0,1fr)_auto] items-center gap-2 rounded-full border border-border/70 bg-surface-container-high/85 px-2 shadow-(--shadow-base) backdrop-blur-xl md:gap-3 md:px-3"
+                >
                 <button
                   onClick={() => router.push("/")}
                   className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
@@ -1505,6 +1526,7 @@ export function EditorWorkspace({ docId }: Props) {
                   <input
                     value={currentDoc.title || ""}
                     onChange={(e) => setTitle(e.target.value)}
+                    maxLength={EDITOR_TITLE_MAX_LENGTH}
                     className="min-w-0 flex-1 truncate bg-transparent text-lg font-semibold text-foreground placeholder:text-muted focus:outline-none"
                     placeholder="Untitled Flow"
                     style={{ fontFamily: "var(--font-syne)" }}

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Outfit, JetBrains_Mono, Syne } from "next/font/google";
 import "./globals.css";
 import "@/plugins"; // Auto-register diagram plugins
+import { CommandMenu } from "@/components/common/command-menu";
 
 
 const inter = Inter({
@@ -48,6 +49,7 @@ export default function RootLayout({
         className={`${inter.variable} ${outfit.variable} ${syne.variable} ${jetbrainsMono.variable} style-demo-theme antialiased`}
       >
         {children}
+        <CommandMenu />
       </body>
     </html>
   );

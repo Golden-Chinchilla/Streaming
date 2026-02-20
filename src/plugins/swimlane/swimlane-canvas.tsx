@@ -98,6 +98,11 @@ const SWIMLANE_PALETTES: Record<
 const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
 
+type SwimlaneInteractionState = {
+    interactionMode?: "select" | "pan";
+    isSpacePanning?: boolean;
+};
+
 /* ------------------------------------------------------------------ */
 /*  SwimlaneCanvas                                                    */
 /* ------------------------------------------------------------------ */
@@ -106,6 +111,7 @@ export function SwimlaneCanvas({
     data,
     width,
     height,
+    interactionState = {},
     onDataChange,
     onSvgReady,
 }: CanvasProps<SwimlaneData>) {
@@ -121,6 +127,9 @@ export function SwimlaneCanvas({
     const orientation = style.orientation ?? "horizontal";
     const paletteKey = style.palette ?? "ocean";
     const activePalette = SWIMLANE_PALETTES[paletteKey] ?? SWIMLANE_PALETTES.ocean;
+    const { interactionMode = "select", isSpacePanning = false } =
+        interactionState as SwimlaneInteractionState;
+    const isPanActive = interactionMode === "pan" || isSpacePanning;
 
     const svgRef = useRef<SVGSVGElement | null>(null);
     const [zoom, setZoom] = useState(1);
@@ -518,17 +527,15 @@ export function SwimlaneCanvas({
 
     // Mouse handlers
     const onCanvasMouseDown = (event: MouseEvent<SVGSVGElement>) => {
-        if (event.button === 1 || event.button === 0) {
-            // Start panning (middle click, or left click on empty canvas)
-            if (event.target === event.currentTarget || event.button === 1) {
-                event.preventDefault();
-                setPanning({
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    originX: pan.x,
-                    originY: pan.y,
-                });
-            }
+        const isMiddleButton = event.button === 1;
+        if (isMiddleButton || isPanActive) {
+            event.preventDefault();
+            setPanning({
+                startX: event.clientX,
+                startY: event.clientY,
+                originX: pan.x,
+                originY: pan.y,
+            });
         }
     };
 
@@ -564,6 +571,8 @@ export function SwimlaneCanvas({
     // Cursor style
     const cursorClass = panning
         ? "cursor-grabbing"
+        : isPanActive
+            ? "cursor-grab"
         : dragState
             ? "cursor-move"
             : "cursor-default";
@@ -652,29 +661,35 @@ export function SwimlaneCanvas({
                             {/* Lane header */}
                             {(() => {
                                 const headerRect = orientRect(0, entry.start, HEADER_WIDTH, entry.size);
+                                const headerTextCenter = orientPoint(
+                                    HEADER_WIDTH / 2,
+                                    entry.start + entry.size / 2,
+                                );
                                 return (
-                                    <rect
-                                        x={headerRect.x}
-                                        y={headerRect.y}
-                                        width={headerRect.width}
-                                        height={headerRect.height}
-                                        fill={laneHeaderBg}
-                                        rx={4}
-                                    />
+                                    <>
+                                        <rect
+                                            x={headerRect.x}
+                                            y={headerRect.y}
+                                            width={headerRect.width}
+                                            height={headerRect.height}
+                                            fill={laneHeaderBg}
+                                            rx={4}
+                                        />
+                                        <text
+                                            x={headerTextCenter.x}
+                                            y={headerTextCenter.y}
+                                            textAnchor="middle"
+                                            dominantBaseline="middle"
+                                            fontSize={Math.max(13, style.labelFontSize + 2)}
+                                            fontWeight={600}
+                                            fontFamily="ui-sans-serif, system-ui, sans-serif"
+                                            fill={laneHeaderText}
+                                        >
+                                            {entry.lane.label}
+                                        </text>
+                                    </>
                                 );
                             })()}
-                            <text
-                                x={orientation === "horizontal" ? HEADER_WIDTH / 2 : entry.start + entry.size / 2}
-                                y={orientation === "horizontal" ? entry.start + entry.size / 2 : HEADER_WIDTH / 2}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fontSize={Math.max(13, style.labelFontSize + 2)}
-                                fontWeight={600}
-                                fontFamily="ui-sans-serif, system-ui, sans-serif"
-                                fill={laneHeaderText}
-                            >
-                                {entry.lane.label}
-                            </text>
                         </g>
                     ))}
 
@@ -805,8 +820,9 @@ export function SwimlaneCanvas({
                                     width={node.width + 4}
                                     height={node.height + 4}
                                     fill="transparent"
-                                    className="cursor-move"
+                                    className={isPanActive ? "cursor-grab" : "cursor-move"}
                                     onMouseDown={(event) => {
+                                        if (isPanActive || interactionMode !== "select") return;
                                         if (event.button !== 0) return;
                                         event.preventDefault();
                                         event.stopPropagation();

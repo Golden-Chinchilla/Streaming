@@ -564,11 +564,7 @@ button:disabled,
   will-change: transform, filter;
 }
 
-@media (hover: hover) {
-  .hero-asset-wrap:hover .hero-asset {
-    filter: drop-shadow(0 14px 28px color-mix(in srgb, var(--primary) 26%, transparent));
-  }
-}
+
 
 @keyframes hover-character-loop {
   0%,
